@@ -237,6 +237,7 @@ td:last-child{text-align:right;font-family:ui-monospace,SFMono-Regular,Menlo,mon
 <div id="app"></div>
 <script>
 /* ============================ CẤU HÌNH & TIỆN ÍCH ============================ */
+const APP_VERSION = '2026.10.05-1';   // tăng mỗi lần cập nhật để app tự nhận bản mới
 const LS = {
   cfg: 'vocab.cfg', queue: 'vocab.queue', stats: 'vocab.dailyStats'
 };
@@ -446,8 +447,9 @@ async function loadAll() {
   DB.usage = d.usage_summary || null;
   DB.review = d.review_stats || null;
   DB.progress = {}; DB.enrichment = {};
+  const ST = { '0': 'new', '1': 'learning', '2': 'review', '3': 'relearning' };
   (d.progress || []).forEach(p => DB.progress[p.word_id] = {
-    ...p, S: +p.stability || 0, D: +p.difficulty || 0, reps: +p.reps || 0,
+    ...p, state: ST[p.state] || p.state, S: +p.stability || 0, D: +p.difficulty || 0, reps: +p.reps || 0,
     lapses: +p.lapses || 0, stage: +p.stage || 0, step: 0
   });
   (d.enrichment || []).forEach(e => DB.enrichment[e.word_id] = e);
@@ -680,7 +682,7 @@ function speak(text, lang) {
 }
 
 /* ============================ GIAO DIỆN ============================ */
-function render(html) { app.innerHTML = html; renderAt = Date.now(); arm(); }
+function render(html) { app.innerHTML = html; renderAt = Date.now(); atHome = false; arm(); }
 
 function viewSetup(msg = '') {
   render(`
@@ -727,6 +729,7 @@ function viewHome() {
       </button>`).join('') || '<div class="card">Chưa có từ nào trong sheet. Lưu vài từ rồi quay lại.</div>'}
     <p class="muted" id="syncState" style="margin-top:20px"></p>`);
   updateSyncBadge();
+  atHome = true;
   app.querySelectorAll('.deck').forEach(b => b.onclick = once(() => startSession(b.dataset.lang)));
   $('#settings').onclick = once(viewSettings);
   $('#stats').onclick = once(() => { viewStats(); }); // không giữ khóa trong lúc tải dữ liệu
@@ -759,6 +762,7 @@ function viewSettings() {
     <div class="card">
       <h3>Kết nối</h3>
       <p class="muted">${esc(cfg.apiUrl.slice(0, 60))}…</p>
+      <p class="muted">Phiên bản app: ${APP_VERSION}</p>
       <div class="row">
         <button id="sync">Gửi ${queueRead().length} thay đổi</button>
         <button id="edit">Đổi kết nối</button>
@@ -1292,6 +1296,24 @@ function startCustom(lang, ids) {
   nextCard();
 }
 
+/* ============================ TỰ CẬP NHẬT ============================ */
+// Trình duyệt và app trên màn hình chính iPhone hay giữ bản cũ trong bộ nhớ đệm tới 10 phút hoặc lâu hơn.
+// Hỏi thẳng máy chủ (bỏ qua bộ nhớ đệm); có bản mới hơn thì gửi nốt dữ liệu rồi tải lại.
+let atHome = false;
+async function checkUpdate() {
+  if (location.protocol === 'file:') return;
+  try {
+    const res = await fetch(location.pathname + '?check=' + Date.now(), { cache: 'no-store' });
+    const m = (await res.text()).match(/const APP_VERSION = '([^']+)'/);
+    if (m && m[1] > APP_VERSION) {
+      if (!atHome) { toast('Có bản mới, app sẽ cập nhật khi bạn về trang chủ.', 3000); return; }
+      await flush(true);
+      location.replace(location.pathname + '?v=' + encodeURIComponent(m[1]));
+    }
+  } catch { /* mất mạng thì thôi */ }
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkUpdate(); });
+
 /* ============================ KHỞI ĐỘNG ============================ */
 async function boot() {
   migrateQueue();
@@ -1301,6 +1323,7 @@ async function boot() {
     await loadAll();
     await flush(true);
     viewHome();
+    checkUpdate();
   } catch (e) {
     viewSetup('Không tải được dữ liệu: ' + e.message + '. Kiểm tra lại địa chỉ và token, và nhớ deploy bản mới sau khi sửa Code.gs.');
   }

@@ -256,7 +256,7 @@ button.tw:focus-visible{outline:2px solid #007aff;outline-offset:1px}
 <div id="app"></div>
 <script>
 /* ============================ CẤU HÌNH & TIỆN ÍCH ============================ */
-const APP_VERSION = '2026.10.05-4';   // tăng mỗi lần cập nhật để app tự nhận bản mới
+const APP_VERSION = '2026.10.05-5';   // tăng mỗi lần cập nhật để app tự nhận bản mới
 const LS = {
   cfg: 'vocab.cfg', queue: 'vocab.queue', stats: 'vocab.dailyStats'
 };
@@ -535,52 +535,173 @@ function logUsage(json, feature, wordId, model) {
   return row;
 }
 
+/* ---------- Dữ liệu AI cho từng từ (tab Enrichment) ----------
+   - Làm giàu lần đầu: khi từ chưa có dữ liệu, hoặc dữ liệu thiếu/kém (do app cũ tạo).
+   - Làm mới định kỳ: sau mỗi `refresh_days` ngày (mặc định 10), AI viết câu điền chỗ trống mới,
+     thêm ví dụ mới, mở rộng giải thích, từ gần nghĩa, họ từ. Chạy nền, không làm chậm lúc học. */
+
+// Chuẩn hóa danh sách về mảng chuỗi: chấp nhận JSON mảng chuỗi, mảng {original, vi}, hoặc chuỗi cách nhau bằng dấu phẩy.
+function listOf(v) {
+  if (!v) return [];
+  let arr;
+  try { arr = JSON.parse(v); } catch { arr = null; }
+  if (!Array.isArray(arr)) {
+    const s = String(v).trim();
+    if (!s || s === '[]') return [];
+    arr = s.split(/(?<=\)),\s*|;\s*|\n+/).map(x => x.trim()).filter(Boolean);
+  }
+  return arr.map(x => {
+    if (x && typeof x === 'object') {
+      const o = x.original || x.en || x.sentence || x.text || '';
+      return o + (x.vi ? ` (${x.vi})` : '');
+    }
+    return String(x);
+  }).filter(Boolean);
+}
+
+const GENERIC = /Ghi nhớ bằng cách đặt câu/i;
+function needsEnrich(e) {
+  if (!e || !e.meaning_fixed || !e.cloze_sentence) return true;
+  if (!e.definition_en || !listOf(e.examples).length || GENERIC.test(e.mnemonic || '')) return true;
+  return false;
+}
+const refreshDays = () => +DB.settings.refresh_days || 10;
+function isStale(e) {
+  const t = Date.parse(e.refreshed_at || e.updated_at || '');
+  return !t || Date.now() - t > refreshDays() * 864e5;
+}
+
 const ENRICH_SCHEMA = {
   type: 'OBJECT',
   properties: {
     meaning_fixed: { type: 'STRING' }, pos: { type: 'STRING' }, ipa: { type: 'STRING' },
-    definition_en: { type: 'STRING' }, collocations: { type: 'ARRAY', items: { type: 'STRING' } },
+    definition_en: { type: 'STRING' }, usage_note: { type: 'STRING' },
+    synonyms: { type: 'ARRAY', items: { type: 'STRING' } }, word_family: { type: 'STRING' },
+    collocations: { type: 'ARRAY', items: { type: 'STRING' } },
     cloze_sentence: { type: 'STRING' }, examples: { type: 'ARRAY', items: { type: 'STRING' } },
     mnemonic: { type: 'STRING' }, emoji: { type: 'STRING' },
     base_form: { type: 'STRING' }, romanization: { type: 'STRING' }, hanviet: { type: 'STRING' }
   },
-  required: ['meaning_fixed', 'cloze_sentence', 'emoji']
+  required: ['meaning_fixed', 'definition_en', 'usage_note', 'cloze_sentence', 'examples', 'emoji']
 };
 
-async function enrich(raw) {
-  const lang = raw['Ngôn ngữ'] === 'ko' ? 'tiếng Hàn' : 'tiếng Anh';
-  const prompt = `Bạn giúp một người Việt học ${lang}.
+const COMMON_RULES = `- examples: mỗi câu viết dạng "câu ${'${lang}'} (bản dịch tiếng Việt)", tự nhiên như người bản xứ, đời thường, không hoa mỹ.
+- cloze_sentence: MỘT câu ngắn, rõ nghĩa, chứa NGUYÊN VĂN từ/cụm cần học (đúng chính tả như mục từ, không chia khác đi) để có thể che từ đó làm bài điền chỗ trống.
+- usage_note: 2–4 câu tiếng Việt giải thích sâu: sắc thái, khi nào dùng / không dùng, văn phong (trang trọng hay đời thường), lỗi người Việt hay mắc.
+- synonyms: 2–4 từ gần nghĩa, mỗi mục kèm khác biệt ngắn gọn, ví dụ "amusing (nhẹ hơn hilarious)".
+- word_family: các dạng từ cùng gốc nếu có, ví dụ "enthusiasm (n), enthusiastic (adj)"; không có thì để trống.`;
+
+function enrichPrompt(raw, langName) {
+  return `Bạn giúp một người Việt học ${langName}.
 Từ/cụm cần học: "${raw['Từ vựng']}"
 Ngữ cảnh người học đã gặp: "${(raw['Câu / Ngữ cảnh'] || '').slice(0, 600)}"
 Nghĩa người học tự ghi: "${raw['Nghĩa tiếng Việt'] || ''}"
 
 Trả JSON:
 - meaning_fixed: nghĩa tiếng Việt ĐÚNG trong ngữ cảnh này, ngắn gọn (sửa nếu nghĩa người học ghi bị sai).
-- pos: từ loại trong ngữ cảnh. ipa: phiên âm (để trống nếu là tiếng Hàn).
+- pos: từ loại trong ngữ cảnh (tiếng Việt). ipa: phiên âm IPA (để trống nếu là tiếng Hàn).
 - definition_en: định nghĩa tiếng Anh đơn giản.
-- collocations: 3-5 cụm đi kèm thông dụng.
-- cloze_sentence: MỘT câu ngắn, rõ nghĩa, có chứa đúng từ này; rút gọn từ ngữ cảnh gốc nếu ngữ cảnh dài hoặc bị cắt.
-- examples: 2 câu ví dụ mới trình độ B1.
-- mnemonic: mẹo nhớ cho người Việt.
-- emoji: 1-2 emoji.
-- base_form: dạng từ điển (quan trọng với tiếng Hàn, nếu không có thì để trống).
-- romanization: phiên âm Latin nếu là tiếng Hàn.
-- hanviet: âm Hán Việt nếu là từ gốc Hán, ngược lại để trống.`;
-  const { data, usage } = await callGemini({ feature: 'enrich', wordId: raw.word_id, prompt, schema: ENRICH_SCHEMA });
+- collocations: 3–5 cụm đi kèm thông dụng, mỗi mục kèm nghĩa tiếng Việt trong ngoặc.
+- examples: 2 câu ví dụ mới, trình độ B1.
+${COMMON_RULES.replace('${lang}', langName)}
+- mnemonic: mẹo nhớ cụ thể cho người Việt (âm, hình ảnh, chiết tự), không chung chung.
+- emoji: 1–2 emoji.
+- base_form: dạng từ điển. romanization: phiên âm Latin nếu là tiếng Hàn. hanviet: âm Hán Việt nếu là từ gốc Hán, ngược lại để trống.`;
+}
+
+function refreshPrompt(raw, e, langName) {
+  return `Bạn giúp một người Việt ôn lại từ ${langName} đã học được một thời gian. Hãy làm MỚI nội dung để họ gặp từ này trong những tình huống khác, hiểu sâu hơn, không học vẹt một câu.
+Từ/cụm: "${raw['Từ vựng']}"
+Ngữ cảnh gốc: "${(raw['Câu / Ngữ cảnh'] || '').slice(0, 400)}"
+Nghĩa hiện tại: "${e.meaning_fixed || raw['Nghĩa tiếng Việt'] || ''}"
+Câu điền chỗ trống đang dùng: "${e.cloze_sentence || ''}"
+Các ví dụ đã có (KHÔNG lặp lại): ${JSON.stringify(listOf(e.examples).slice(0, 6))}
+Cụm đi kèm đã có: ${JSON.stringify(listOf(e.collocations).slice(0, 8))}
+Giải thích đã có: "${e.usage_note || ''}"
+
+Trả JSON:
+- meaning_fixed: giữ nguyên nghĩa hiện tại; chỉ sửa nếu nó SAI so với ngữ cảnh gốc. Nếu từ có nghĩa phổ biến khác, nói trong usage_note, không đổi meaning_fixed.
+- pos, ipa, definition_en: giữ hoặc chỉnh cho chính xác hơn.
+- cloze_sentence: một câu MỚI, bối cảnh khác hẳn câu đang dùng.
+- examples: 2 câu ví dụ MỚI ở bối cảnh khác các ví dụ đã có.
+- collocations: 2–3 cụm đi kèm MỚI, chưa có trong danh sách, kèm nghĩa tiếng Việt.
+${COMMON_RULES.replace('${lang}', langName)}
+- usage_note: viết lại sâu hơn bản đã có, thêm điều mới (không lặp nguyên văn).
+- mnemonic: giữ mẹo cũ nếu tốt, hoặc đưa mẹo mới dễ nhớ hơn.
+- emoji: 1–2 emoji.`;
+}
+
+const costCols = u => ({ model: u.model, in_tokens: u.in_tokens, out_tokens: u.out_tokens,
+  thought_tokens: u.thought_tokens, cost_usd: u.cost_usd, cost_vnd: u.cost_vnd });
+const langNameOf = raw => raw['Ngôn ngữ'] === 'ko' ? 'tiếng Hàn' : 'tiếng Anh';
+
+async function enrich(raw) {
+  const { data, usage } = await callGemini({ feature: 'enrich', wordId: raw.word_id, prompt: enrichPrompt(raw, langNameOf(raw)), schema: ENRICH_SCHEMA });
+  const now = nowISO();
   const row = {
     word_id: raw.word_id, word: raw['Từ vựng'],
     meaning_fixed: data.meaning_fixed || '', pos: data.pos || '', ipa: data.ipa || '',
     definition_en: data.definition_en || '', collocations: JSON.stringify(data.collocations || []),
     cloze_sentence: data.cloze_sentence || '', examples: JSON.stringify(data.examples || []),
-    mnemonic: data.mnemonic || '', emoji: data.emoji || '', updated_at: nowISO(),
+    mnemonic: data.mnemonic || '', emoji: data.emoji || '', updated_at: now,
     lang: raw['Ngôn ngữ'] || 'en', base_form: data.base_form || '',
     romanization: data.romanization || '', hanviet: data.hanviet || '',
-    model: usage.model, in_tokens: usage.in_tokens, out_tokens: usage.out_tokens,
-    thought_tokens: usage.thought_tokens, cost_usd: usage.cost_usd, cost_vnd: usage.cost_vnd
+    usage_note: data.usage_note || '', synonyms: JSON.stringify(data.synonyms || []), word_family: data.word_family || '',
+    refreshed_at: now, refresh_count: 0, ...costCols(usage)
   };
   DB.enrichment[raw.word_id] = row;
   enqueue('upsertEnrichment', row);
   return row;
+}
+
+// Làm mới: câu điền mới + ví dụ mới được thêm lên đầu (giữ tối đa 6), cụm đi kèm cộng dồn (tối đa 10).
+async function refreshEnrichment(raw) {
+  const e = DB.enrichment[raw.word_id];
+  if (!e) return enrich(raw);
+  const { data, usage } = await callGemini({ feature: 'refresh', wordId: raw.word_id, prompt: refreshPrompt(raw, e, langNameOf(raw)), schema: ENRICH_SCHEMA });
+  const uniq = arr => [...new Map(arr.filter(Boolean).map(x => [norm(x), x])).values()];
+  const oldCloze = e.cloze_sentence ? [e.cloze_sentence] : [];
+  const now = nowISO();
+  const row = {
+    ...e,
+    meaning_fixed: data.meaning_fixed || e.meaning_fixed,
+    pos: data.pos || e.pos, ipa: data.ipa || e.ipa, definition_en: data.definition_en || e.definition_en,
+    cloze_sentence: data.cloze_sentence || e.cloze_sentence,
+    examples: JSON.stringify(uniq([...(data.examples || []), ...listOf(e.examples), ...oldCloze]).slice(0, 6)),
+    collocations: JSON.stringify(uniq([...listOf(e.collocations), ...(data.collocations || [])]).slice(0, 10)),
+    usage_note: data.usage_note || e.usage_note || '',
+    synonyms: JSON.stringify(uniq([...(data.synonyms || []), ...listOf(e.synonyms)]).slice(0, 5)),
+    word_family: data.word_family || e.word_family || '',
+    mnemonic: data.mnemonic || e.mnemonic, emoji: data.emoji || e.emoji,
+    updated_at: now, refreshed_at: now, refresh_count: (+e.refresh_count || 0) + 1,
+    ...costCols(usage)
+  };
+  DB.enrichment[raw.word_id] = row;
+  enqueue('upsertEnrichment', row);
+  dailyStat('refresh', 1);
+  return row;
+}
+
+// Hàng đợi làm mới chạy nền: mỗi lần chỉ một từ, tối đa 30 từ/ngày để giữ chi phí thấp.
+const refreshQ = [], refreshTried = new Set();
+let refreshing = false;
+function scheduleRefresh(items) {
+  if (!cfg.geminiKey) return;
+  items.filter(Boolean).forEach(x => {
+    const id = x.raw.word_id, e = DB.enrichment[id];
+    if (e && !needsEnrich(e) && isStale(e) && !refreshTried.has(id)) { refreshTried.add(id); refreshQ.push(x.raw); }
+  });
+  runRefresh();
+}
+async function runRefresh() {
+  if (refreshing) return;
+  refreshing = true;
+  try {
+    while (refreshQ.length && dailyStat('refresh') < 30) {
+      const raw = refreshQ.shift();
+      try { await refreshEnrichment(raw); } catch (err) { console.warn('Làm mới thất bại', raw['Từ vựng'], err); }
+    }
+  } finally { refreshing = false; }
 }
 
 async function gradeSentence(word, meaning, sentence) {
@@ -773,6 +894,7 @@ function viewSettings() {
       ${DB.settings.billing_mode === 'free' ? '<p class="pill warn" style="display:inline-block;margin-top:12px">Chi phí quy đổi tham khảo — đang dùng hạn mức miễn phí</p>' : ''}`
       : '<p class="muted">Chưa có dữ liệu. Thêm usage_summary vào doGet trong Code.gs để xem mục này.</p>'}
     </div>
+    ${aiDataCard()}
     <div class="card">
       <h3>Thông số học</h3>
       <table>
@@ -792,9 +914,55 @@ function viewSettings() {
   $('#back').onclick = once(viewHome);
   $('#edit').onclick = once(() => viewSetup());
   $('#sync').onclick = once(async () => { await flush(true); toast('Đã gửi xong'); viewSettings(); });
+  const be = $('#bulkEnrich'), br = $('#bulkRefresh');
+  if (be) be.onclick = once(() => { bulkRun('enrich'); });
+  if (br) br.onclick = once(() => { bulkRun('refresh'); });
+}
+
+function aiDataLists() {
+  const items = DB.raw.map(r => ({ raw: r, card: cardOf(r) })).filter(x => x.card.suspended !== 'true');
+  return {
+    missing: items.filter(x => needsEnrich(DB.enrichment[x.raw.word_id])),
+    stale: items.filter(x => { const e = DB.enrichment[x.raw.word_id]; return e && !needsEnrich(e) && isStale(e); })
+  };
+}
+function aiDataCard() {
+  const { missing, stale } = aiDataLists();
+  return `<div class="card">
+    <h3>Dữ liệu AI cho từ vựng</h3>
+    <p class="muted">Gemini API key: ${cfg.geminiKey ? 'đã nhập' : '<b>chưa nhập</b>: các tính năng AI đang tắt (Kết nối → Đổi kết nối)'}.
+      AI tự làm giàu từ khi bạn gặp lần đầu, và làm mới mỗi ${refreshDays()} ngày (đổi trong Settings: <b>refresh_days</b>).</p>
+    <table>
+      <tr><td>Từ chưa có dữ liệu hoặc dữ liệu còn thiếu</td><td>${missing.length}</td></tr>
+      <tr><td>Từ đã quá ${refreshDays()} ngày chưa làm mới</td><td>${stale.length}</td></tr>
+    </table>
+    <p class="muted" id="bulkState"></p>
+    ${cfg.geminiKey ? `<div class="row" style="margin-top:10px">
+      ${missing.length ? `<button id="bulkEnrich">Làm giàu ${missing.length} từ</button>` : ''}
+      ${stale.length ? `<button id="bulkRefresh">Làm mới ${stale.length} từ</button>` : ''}
+    </div>` : ''}
+  </div>`;
+}
+let bulkRunning = false;
+async function bulkRun(mode) {
+  if (bulkRunning) return;
+  bulkRunning = true;
+  const list = aiDataLists()[mode === 'enrich' ? 'missing' : 'stale'];
+  let ok = 0, fail = 0;
+  const say = t => { const el = document.getElementById('bulkState'); if (el) el.textContent = t; };
+  for (const x of list) {
+    say(`Đang xử lý ${ok + fail + 1}/${list.length}: ${x.raw['Từ vựng']}…`);
+    try { mode === 'enrich' ? await enrich(x.raw) : await refreshEnrichment(x.raw); ok++; }
+    catch (err) { fail++; console.warn(err); }
+  }
+  await flush(true);
+  bulkRunning = false;
+  toast(`Xong: ${ok} từ${fail ? `, ${fail} từ lỗi` : ''}.`, 3000);
+  if (document.getElementById('bulkState')) viewSettings();
 }
 
 /* ============================ PHIÊN HỌC ============================ */
+const enrichFailed = new Set();
 const isLearning = c => c.state === 'learning' || c.state === 'relearning';
 
 /* Phiên học có hai phần:
@@ -879,10 +1047,13 @@ async function nextCard() {
   const item = pick.item;
   item._scored = pick.scored;
   session.current = item;
-  if (!DB.enrichment[item.card.word_id] && cfg.geminiKey) {
-    render(`<div class="card"><p class="muted">Đang chuẩn bị từ mới…</p></div>`);
-    try { await enrich(item.raw); } catch (e) { toast('Không gọi được Gemini: ' + e.message, 3500); }
+  if (cfg.geminiKey && needsEnrich(DB.enrichment[item.card.word_id]) && !enrichFailed.has(item.card.word_id)) {
+    render(`<div class="card"><p class="muted">AI đang chuẩn bị nội dung cho từ này…</p></div>`);
+    try { await enrich(item.raw); }
+    catch (e) { enrichFailed.add(item.card.word_id); toast('Không gọi được Gemini: ' + e.message, 3500); }
   }
+  // Làm mới nền cho từ này và vài thẻ sắp tới (nếu đã quá hạn làm mới); không chặn màn hình.
+  scheduleRefresh([item, ...session.queue.slice(0, 3), ...(session.practice || []).slice(0, 2)]);
   showCard(item);
 }
 
@@ -1007,7 +1178,7 @@ function showCard(item) {
 function reveal(item, d, rating, extra, metrics) {
   item._ms = metrics ? Math.round(metrics.ms) : '';
   const token = item._token;
-  const e = d.e, colls = safeList(e.collocations), exs = safeList(e.examples);
+  const e = d.e, colls = listOf(e.collocations), exs = listOf(e.examples), syns = listOf(e.synonyms);
   const differs = e.meaning_fixed && d.raw['Nghĩa tiếng Việt'] &&
     norm(e.meaning_fixed) !== norm(d.raw['Nghĩa tiếng Việt']);
   render(`
@@ -1022,7 +1193,11 @@ function reveal(item, d, rating, extra, metrics) {
       ${d.raw['Câu / Ngữ cảnh'] ? `<p class="context">${highlight(d.raw['Câu / Ngữ cảnh'], d.word)}</p>` : ''}
       ${colls.length ? `<div class="pills">${colls.map(c => `<span class="pill">${esc(c)}</span>`).join('')}</div>` : ''}
       ${exs.length ? `<p class="muted" style="margin-top:12px">${exs.map(esc).join('<br>')}</p>` : ''}
+      ${e.usage_note ? `<p class="muted" style="margin-top:12px"><b>Giải thích thêm:</b> ${esc(e.usage_note)}</p>` : ''}
+      ${syns.length ? `<p class="muted"><b>Gần nghĩa:</b> ${syns.map(esc).join(' · ')}</p>` : ''}
+      ${e.word_family ? `<p class="muted"><b>Họ từ:</b> ${esc(e.word_family)}</p>` : ''}
       ${e.mnemonic ? `<p class="muted">Mẹo nhớ: ${esc(e.mnemonic)}</p>` : ''}
+      ${cfg.geminiKey ? `<p class="muted">${e.refreshed_at ? `AI làm mới lần gần nhất: ${new Date(e.refreshed_at).toLocaleDateString('vi-VN')}${+e.refresh_count ? ` (lần ${e.refresh_count})` : ''} · ` : ''}<button class="ghost" id="refreshNow" style="padding:2px 6px">✨ Làm mới bằng AI</button></p>` : ''}
       ${d.raw['Nguồn (URL)'] ? `<p class="muted"><a href="${esc(d.raw['Nguồn (URL)'])}" target="_blank" rel="noopener">${esc(d.raw['Tiêu đề trang'] || 'Nguồn')}</a></p>` : ''}
       <div class="auto">
         <span>
@@ -1042,6 +1217,12 @@ function reveal(item, d, rating, extra, metrics) {
   arm(700);
   $('#next').onclick = once(() => commit(item, d, rating, token));
   $('#say').onclick = () => speak(d.word, d.lang);
+  const rn = $('#refreshNow');
+  if (rn) rn.onclick = async () => {
+    rn.disabled = true; rn.textContent = 'Đang làm mới…';
+    try { await refreshEnrichment(d.raw); rn.textContent = 'Đã làm mới, lần gặp sau sẽ thấy nội dung mới'; flush(true); }
+    catch (err) { rn.disabled = false; rn.textContent = '✨ Làm mới bằng AI'; toast('Không làm mới được: ' + err.message, 3500); }
+  };
   if (DB.settings.autoplay !== 'false') speak(d.word, d.lang);
   app.querySelectorAll('.rate button').forEach(b => b.onclick = once(() => commit(item, d, +b.dataset.g, token)));
 }

@@ -182,6 +182,52 @@ td:last-child{text-align:right;font-family:ui-monospace,SFMono-Regular,Menlo,mon
   box-shadow:0 12px 36px rgba(15,23,42,.18), inset 0 1.5px 1.5px rgba(255,255,255,1);
 }
 .hide{display:none}
+
+/* --- phím tắt --- */
+.k,.kbdhint{display:none}
+@media (hover:hover) and (pointer:fine){
+  .k{display:inline-block;min-width:22px;text-align:center;margin-right:10px;padding:1px 6px;border-radius:9999px;
+     font-size:11px;font-weight:700;color:rgba(28,28,46,.55);background:rgba(255,255,255,.75);border:1px solid rgba(255,255,255,.95)}
+  .kbdhint{display:block;margin-top:12px}
+}
+
+/* --- thống kê --- */
+.bar>span{display:flex;gap:4px}
+.seg{display:flex;gap:4px;padding:4px;border-radius:9999px;margin-bottom:14px;
+  background:rgba(255,255,255,.4);border:1px solid rgba(255,255,255,.7)}
+.seg button{flex:1;padding:8px 6px;font-size:13px;border-color:transparent;background:transparent;box-shadow:none}
+.seg button.on{background:rgba(255,255,255,.95);border-color:rgba(255,255,255,.95);color:var(--accent-hi);
+  box-shadow:0 4px 16px rgba(0,0,0,.08), inset 0 1px 1px #fff}
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
+.tile{position:relative;overflow:hidden;border-radius:20px;padding:14px 16px;
+  background:linear-gradient(180deg,rgba(255,255,255,.34),rgba(255,255,255,.14));
+  -webkit-backdrop-filter:blur(22px) saturate(160%);backdrop-filter:blur(22px) saturate(160%);
+  border:1px solid rgba(255,255,255,.55);box-shadow:0 14px 34px rgba(31,38,80,.16), inset 0 1px 0 rgba(255,255,255,.7)}
+.tile .v{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:1.7rem;font-weight:700;line-height:1.1}
+.tile .t{margin-top:6px;font-size:10.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:rgba(28,28,46,.45)}
+.tile .s{font-size:11px;font-weight:500;color:rgba(28,28,46,.5)}
+.bars{display:flex;align-items:flex-end;gap:5px;height:140px;margin-top:12px}
+.bars .col{flex:1;min-width:0;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:4px}
+.bars i{display:block;width:100%;border-radius:8px 8px 4px 4px;border:1px solid rgba(10,132,255,.35);
+  background:linear-gradient(180deg,rgba(255,255,255,.9),rgba(10,132,255,.4))}
+.bars i.hl{background:linear-gradient(180deg,rgba(255,255,255,.95),rgba(10,132,255,.8))}
+.bars .v{height:12px;font-size:10px;font-weight:700;color:rgba(28,28,46,.6);font-family:ui-monospace,Menlo,monospace}
+.bars .l{font-size:10px;font-weight:600;color:rgba(28,28,46,.45);white-space:nowrap}
+.hrow{display:grid;grid-template-columns:56px 1fr 44px;align-items:center;gap:10px;margin:10px 0;font-size:13px;font-weight:600}
+.hrow .track{height:10px;border-radius:9999px;overflow:hidden;background:rgba(255,255,255,.55);border:1px solid rgba(255,255,255,.8)}
+.hrow .track i{display:block;height:100%;border-radius:9999px}
+.hrow .n{text-align:right;font-family:ui-monospace,Menlo,monospace;font-weight:700}
+.stack{display:flex;height:14px;border-radius:9999px;overflow:hidden;margin:12px 0;
+  background:rgba(255,255,255,.5);border:1px solid rgba(255,255,255,.8)}
+.stack i{display:block;height:100%}
+.legend{display:grid;grid-template-columns:1fr 1fr;gap:7px 14px;font-size:12.5px;font-weight:600}
+.legend b{font-family:ui-monospace,Menlo,monospace}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px}
+.li{display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:9px 0;
+  border-bottom:1px solid rgba(255,255,255,.6);font-size:14px}
+.li .w{font-weight:700}
+.li .m{color:rgba(28,28,46,.55);font-weight:500;font-size:12.5px;margin-left:8px}
+.li .c{font-family:ui-monospace,Menlo,monospace;font-weight:700;color:var(--bad)}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
 </head>
@@ -209,7 +255,7 @@ let session = null;
 
 /* Chống bấm trùng: sau mỗi lần vẽ màn hình mới, bỏ qua các cú bấm trong 450ms đầu
    (nút mới vừa mọc ra ngay dưới ngón tay), và khóa lại khi đang xử lý một hành động. */
-let busy = false, guardUntil = 0;
+let busy = false, guardUntil = 0, renderAt = 0;
 function arm(ms = 450) { guardUntil = Date.now() + ms; }
 function once(fn) {
   return async (...args) => {
@@ -338,12 +384,14 @@ function updateSyncBadge() {
 }
 
 async function loadAll() {
-  const res = await fetch(`${cfg.apiUrl}?token=${encodeURIComponent(cfg.token)}`);
+  const tz = -new Date().getTimezoneOffset();
+  const res = await fetch(`${cfg.apiUrl}?token=${encodeURIComponent(cfg.token)}&tz=${tz}`);
   const d = await res.json();
   if (d.error) throw new Error(d.error);
   DB.raw = (d.raw || []).filter(r => r['Từ vựng']);
   DB.settings = Object.fromEntries((d.settings || []).map(s => [s.key, s.value]));
   DB.usage = d.usage_summary || null;
+  DB.review = d.review_stats || null;
   DB.progress = {}; DB.enrichment = {};
   (d.progress || []).forEach(p => DB.progress[p.word_id] = {
     ...p, S: +p.stability || 0, D: +p.difficulty || 0, reps: +p.reps || 0,
@@ -579,7 +627,7 @@ function speak(text, lang) {
 }
 
 /* ============================ GIAO DIỆN ============================ */
-function render(html) { app.innerHTML = html; arm(); }
+function render(html) { app.innerHTML = html; renderAt = Date.now(); arm(); }
 
 function viewSetup(msg = '') {
   render(`
@@ -615,7 +663,7 @@ function viewHome() {
     .map(([l, name]) => ({ l, name, ...count(l) })).filter(d => d.total);
 
   render(`
-    <div class="bar"><h1>Hôm nay</h1><button class="ghost" id="settings">Cài đặt</button></div>
+    <div class="bar"><h1>Hôm nay</h1><span><button class="ghost" id="stats">Thống kê</button><button class="ghost" id="settings">Cài đặt</button></span></div>
     ${decks.map(d => `
       <button class="deck" data-lang="${d.l}">
         <span>
@@ -628,6 +676,7 @@ function viewHome() {
   updateSyncBadge();
   app.querySelectorAll('.deck').forEach(b => b.onclick = once(() => startSession(b.dataset.lang)));
   $('#settings').onclick = once(viewSettings);
+  $('#stats').onclick = once(() => { viewStats(); }); // không giữ khóa trong lúc tải dữ liệu
 }
 
 function viewSettings() {
@@ -729,7 +778,8 @@ function showCard(item) {
         <div class="word">${esc(d.word)}</div>
         ${d.sentence ? `<p class="context">${highlight(d.sentence, d.word)}</p>` : ''}
         <p class="muted">Nghĩa nào đúng trong câu này?</p>
-        <div id="opts">${shuffle(opts).map(o => `<button class="choice" data-v="${esc(o)}">${esc(o)}</button>`).join('')}</div>
+        <div id="opts">${shuffle(opts).map((o, i) => `<button class="choice" data-v="${esc(o)}"><span class="k">${i + 1}</span>${esc(o)}</button>`).join('')}</div>
+        <p class="muted kbdhint">Bấm phím 1–4 để chọn nhanh</p>
       </div>`);
     app.querySelectorAll('.choice').forEach(b => b.onclick = once(() => {
       const ok = b.dataset.v === d.meaning;
@@ -743,8 +793,11 @@ function showCard(item) {
         <div class="meaning">${esc(d.meaning)}</div>
         <p class="muted">Viết một câu của riêng bạn có dùng “${esc(d.word)}”.</p>
         <textarea id="ans" autocapitalize="off"></textarea>
+        <p class="muted kbdhint" style="margin-top:6px">Enter để chấm · Shift + Enter xuống dòng</p>
         <div class="row" style="margin-top:12px"><button class="primary" id="ok">Chấm câu</button></div>
       </div>`);
+    $('#ans').focus();
+    $('#ans').onkeydown = e => { if (enterOK(e) && !e.shiftKey) { e.preventDefault(); $('#ok').click(); } };
     $('#ok').onclick = once(async () => {
       const text = $('#ans').value.trim();
       if (!text) return;
@@ -776,12 +829,14 @@ function showCard(item) {
     };
     const guarded = once(submit);
     $('#ok').onclick = guarded;
-    $('#ans').onkeydown = e => { if (e.key === 'Enter' && !e.repeat) guarded(); };
+    // Enter chỉ nộp khi đã gõ gì đó (tránh lỡ tay tính là Quên) và không đang trong lúc gõ dấu/Hangul.
+    $('#ans').onkeydown = e => { if (enterOK(e) && $('#ans').value.trim()) guarded(); };
   }
   $('#quit').onclick = once(() => { flush(true); viewHome(); });
 }
 
 function reveal(item, d, rating, extra, metrics) {
+  item._ms = metrics ? Math.round(metrics.ms) : '';
   const e = d.e, colls = safeList(e.collocations), exs = safeList(e.examples);
   const differs = e.meaning_fixed && d.raw['Nghĩa tiếng Việt'] &&
     norm(e.meaning_fixed) !== norm(d.raw['Nghĩa tiếng Việt']);
@@ -811,6 +866,7 @@ function reveal(item, d, rating, extra, metrics) {
         ${[[1, 'Quên', 'làm lại'], [2, 'Khó', 'chật vật'], [3, 'Được', 'nhớ ra'], [4, 'Dễ', 'nhớ ngay']]
           .map(([g, t, s]) => `<button data-g="${g}" class="${g === rating ? 'primary' : ''}">${t}<b>${s}</b></button>`).join('')}
       </div>
+      <p class="muted kbdhint">Enter: chấp nhận “${RATING[rating]}” và tiếp tục · 1–4: chọn mức khác rồi tiếp tục</p>
     </div>`);
   // Màn hình đáp án vừa thay chỗ nút vừa bấm, nên chặn lâu hơn một chút.
   arm(700);
@@ -829,7 +885,7 @@ async function commit(item, d, g) {
   enqueue('appendLog', {
     ts: nowISO(), word_id: updated.word_id,
     exercise: ['choice', 'cloze', 'recall', 'produce'][stageBefore],
-    rating: g, correct: g > 1 ? 'true' : 'false', answer: '', ms: ''
+    rating: g, correct: g > 1 ? 'true' : 'false', answer: '', ms: item._ms ?? ''
   });
   item.card = updated;
   session.done++;
@@ -849,6 +905,227 @@ const safeList = s => { try { const v = JSON.parse(s || '[]'); return Array.isAr
 const rx = w => new RegExp(`(${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
 const highlight = (text, word) => esc(text).replace(rx(esc(word)), '<b>$1</b>');
 const blankOut = (text, word) => esc(text).replace(rx(esc(word)), '<span class="blank">______</span>');
+
+/* ============================ BÀN PHÍM ============================ */
+let lastComp = 0;
+document.addEventListener('compositionend', () => { lastComp = Date.now(); }, true);
+// Enter hợp lệ: không giữ phím, không đang gõ dấu/Hangul (Enter chốt chữ không được tính).
+const enterOK = e => e.key === 'Enter' && !e.repeat && !e.isComposing && e.keyCode !== 229 && Date.now() - lastComp > 60;
+
+function kbdClick(el) {
+  if (!el || Date.now() - renderAt < 250) return false; // chặn phím lặp ngay sau khi vừa đổi màn hình
+  guardUntil = 0;                                       // bàn phím không cần khóa chống chạm nhầm của chuột
+  el.click();
+  return true;
+}
+document.addEventListener('keydown', e => {
+  if (e.metaKey || e.ctrlKey || e.altKey || e.repeat || e.isComposing) return;
+  const tag = e.target && e.target.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'BUTTON' || tag === 'A') return;
+  if (e.key === 'Enter') {
+    if (kbdClick($('#next'))) e.preventDefault();
+  } else if (/^[1-4]$/.test(e.key)) {
+    const rate = $(`.rate button[data-g="${e.key}"]`);
+    if (rate) { if (kbdClick(rate)) e.preventDefault(); return; }
+    const choice = app.querySelectorAll('.choice')[+e.key - 1];
+    if (choice && kbdClick(choice)) e.preventDefault();
+  }
+});
+
+/* ============================ THỐNG KÊ ============================ */
+let statsLang = 'all', statsOpen = false, statsNote = '';
+const tzMin = () => -new Date().getTimezoneOffset();
+const dayKey = ms => new Date(ms + tzMin() * 60000).toISOString().slice(0, 10);
+const WD = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
+
+// Gom số liệu lịch sử từ ReviewLog (server) cho các ngôn ngữ đang chọn.
+function historyDay(key, langs) {
+  const out = { n: 0, ok: 0, r: [0, 0, 0, 0], ms: 0, msN: 0 };
+  const day = DB.review && DB.review.days && DB.review.days[key];
+  if (!day) return out;
+  langs.forEach(l => {
+    const o = day[l]; if (!o) return;
+    out.n += o.n; out.ok += o.ok; out.ms += o.ms; out.msN += o.msN;
+    o.r.forEach((v, i) => out.r[i] += v);
+  });
+  return out;
+}
+
+function computeStats(lang) {
+  const langs = lang === 'all' ? ['en', 'ko'] : [lang];
+  const now = Date.now();
+  const rows = DB.raw.filter(r => langs.includes(r['Ngôn ngữ'] || 'en'));
+  const cards = rows.map(r => ({ raw: r, card: cardOf(r) })).filter(x => x.card.suspended !== 'true');
+  const c = x => x.card;
+
+  // Trạng thái từ vựng
+  const nw = cards.filter(x => c(x).state === 'new').length;
+  const learning = cards.filter(x => c(x).state === 'learning' || c(x).state === 'relearning').length;
+  const review = cards.filter(x => c(x).state === 'review');
+  const mature = review.filter(x => c(x).S >= 21).length;
+  const young = review.length - mature;
+  const avgS = review.length ? review.reduce((a, x) => a + c(x).S, 0) / review.length : 0;
+
+  // Lịch ôn 7 ngày tới (thẻ quá hạn tính vào hôm nay)
+  const today = dayKey(now);
+  const forecast = Array.from({ length: 7 }, (_, i) => {
+    const k = dayKey(now + i * 864e5);
+    return { key: k, n: 0, label: i === 0 ? 'Nay' : i === 1 ? 'Mai' : WD[new Date(k + 'T00:00:00Z').getUTCDay()], hl: i === 0 };
+  });
+  cards.filter(x => c(x).state !== 'new').forEach(x => {
+    let k = dayKey(new Date(c(x).due).getTime());
+    if (k < today) k = today;
+    const f = forecast.find(f => f.key === k);
+    if (f) f.n++;
+  });
+
+  // Lịch sử 14 ngày
+  const hasHistory = !!DB.review;
+  const local = JSON.parse(localStorage.getItem(LS.stats) || '{}');
+  const hist = Array.from({ length: 14 }, (_, i) => {
+    const k = dayKey(now - (13 - i) * 864e5);
+    const n = hasHistory ? historyDay(k, langs).n : ((local[k] && local[k].reviews) || 0);
+    const [, m, d] = k.split('-');
+    return { key: k, n, label: `${+d}/${+m}`, hl: k === today };
+  });
+
+  // 30 ngày: tỷ lệ nhớ, phân bố mức đánh giá, thời gian trả lời
+  const agg = { n: 0, ok: 0, r: [0, 0, 0, 0], ms: 0, msN: 0 };
+  for (let i = 0; i < 30; i++) {
+    const o = historyDay(dayKey(now - i * 864e5), langs);
+    agg.n += o.n; agg.ok += o.ok; agg.ms += o.ms; agg.msN += o.msN;
+    o.r.forEach((v, j) => agg.r[j] += v);
+  }
+
+  // Chuỗi ngày học (tính trên cả hai ngôn ngữ): nếu hôm nay chưa học thì tính từ hôm qua
+  let streak = 0;
+  if (hasHistory) {
+    let i = historyDay(today, ['en', 'ko']).n > 0 ? 0 : 1;
+    while (historyDay(dayKey(now - i * 864e5), ['en', 'ko']).n > 0) { streak++; i++; }
+  } else {
+    let i = ((local[today] && local[today].reviews) || 0) > 0 ? 0 : 1;
+    while (((local[dayKey(now - i * 864e5)] || {}).reviews || 0) > 0) { streak++; i++; }
+  }
+
+  // Từ hay quên nhất
+  const lapsy = cards.filter(x => c(x).lapses > 0)
+    .sort((a, b) => c(b).lapses - c(a).lapses).slice(0, 10);
+
+  return {
+    total: cards.length, nw, learning, young, mature, avgS, forecast, hist, agg, streak, lapsy,
+    todayN: hist[hist.length - 1].n, hasHistory
+  };
+}
+
+function barChart(items) {
+  const max = Math.max(1, ...items.map(i => i.n));
+  return `<div class="bars">${items.map(i => `
+    <div class="col"><span class="v">${i.n || ''}</span>
+    <i class="${i.hl ? 'hl' : ''}" style="height:${i.n ? Math.max(6, (i.n / max) * 84) : 3}px"></i>
+    <span class="l">${i.label}</span></div>`).join('')}</div>`;
+}
+
+function statsHTML(lang, note) {
+  const s = computeStats(lang);
+  const target = Math.round((+DB.settings.target_retention || 0.9) * 100);
+  const pct = s.agg.n ? Math.round((s.agg.ok / s.agg.n) * 100) : null;
+  const avgSec = s.agg.msN ? (s.agg.ms / s.agg.msN / 1000).toFixed(1) : null;
+  const names = ['Quên', 'Khó', 'Được', 'Dễ'];
+  const colors = ['#f43f5e', '#f59e0b', '#0a84ff', '#10b981'];
+  const rMax = Math.max(1, ...s.agg.r);
+  const seg = [['all', 'Tất cả'], ['en', 'Tiếng Anh'], ['ko', 'Tiếng Hàn']]
+    .map(([k, t]) => `<button data-lang="${k}" class="${k === lang ? 'on' : ''}">${t}</button>`).join('');
+  const stack = [['#a78bfa', s.nw, 'Chưa học'], ['#f59e0b', s.learning, 'Đang học'],
+                 ['#6ea8fe', s.young, 'Đang nhớ'], ['#10b981', s.mature, 'Nhớ vững']];
+  const tot = Math.max(1, s.total);
+
+  return `
+    <div class="bar"><h1>Thống kê</h1><button class="ghost" id="back">Xong</button></div>
+    <div class="seg">${seg}</div>
+    ${note ? `<p class="pill warn" style="display:inline-block;margin:0 0 12px">${esc(note)}</p>` : ''}
+    ${!s.hasHistory ? `<p class="pill warn" style="display:inline-block;margin:0 0 12px">Chưa có lịch sử từ sheet. Dán Code_v3.gs và deploy bản mới để xem đủ số liệu; hiện chỉ có số lượt ôn trên máy này.</p>` : ''}
+
+    <div class="tiles">
+      <div class="tile"><div class="v">${s.todayN}</div><div class="t">Lượt ôn hôm nay</div></div>
+      <div class="tile"><div class="v">${s.streak}</div><div class="t">Chuỗi ngày học</div><div class="s">ngày liên tiếp</div></div>
+      <div class="tile"><div class="v">${pct === null ? '—' : pct + '%'}</div><div class="t">Nhớ đúng, 30 ngày</div><div class="s">mục tiêu ${target}%</div></div>
+      <div class="tile"><div class="v">${s.total}</div><div class="t">Từ đang học</div><div class="s">${s.mature} từ nhớ vững</div></div>
+    </div>
+
+    <div class="card">
+      <h3>14 ngày gần đây</h3>
+      ${barChart(s.hist)}
+      <p class="muted">Số lượt ôn mỗi ngày${s.hasHistory ? '' : ' (chỉ trên máy này)'}</p>
+    </div>
+
+    <div class="card">
+      <h3>Mức đánh giá, 30 ngày</h3>
+      ${s.agg.n ? names.map((n, i) => `
+        <div class="hrow"><span>${n}</span>
+          <span class="track"><i style="width:${(s.agg.r[i] / rMax) * 100}%;background:${colors[i]}"></i></span>
+          <span class="n">${s.agg.r[i]}</span></div>`).join('') : '<p class="muted">Chưa có dữ liệu.</p>'}
+      ${avgSec ? `<p class="muted">Thời gian trả lời trung bình ${avgSec} giây · Tỷ lệ nhớ đúng tính cả thẻ mới nên thường thấp hơn mục tiêu một chút.</p>` : ''}
+    </div>
+
+    <div class="card">
+      <h3>Trạng thái từ vựng</h3>
+      <div class="stack">${stack.map(([col, n]) => `<i style="width:${(n / tot) * 100}%;background:${col}"></i>`).join('')}</div>
+      <div class="legend">${stack.map(([col, n, t]) => `<span><span class="dot" style="background:${col}"></span>${t} <b>${n}</b></span>`).join('')}</div>
+      <p class="muted" style="margin-top:12px">${s.avgS ? `Độ bền trung bình ${s.avgS < 10 ? s.avgS.toFixed(1) : Math.round(s.avgS)} ngày: sau chừng đó ngày, khả năng nhớ giảm còn khoảng 90%.` : 'Chưa có từ nào qua vòng ôn đầu tiên.'} “Nhớ vững” là độ bền từ 21 ngày.</p>
+    </div>
+
+    <div class="card">
+      <h3>Lịch ôn 7 ngày tới</h3>
+      ${barChart(s.forecast)}
+      <p class="muted">Thẻ quá hạn được tính vào hôm nay</p>
+    </div>
+
+    <div class="card">
+      <h3>Từ hay quên nhất</h3>
+      ${s.lapsy.length ? s.lapsy.map(x => {
+        const e = DB.enrichment[x.card.word_id] || {};
+        return `<div class="li"><span><span class="w">${esc(x.raw['Từ vựng'])}</span><span class="m">${esc(e.meaning_fixed || x.raw['Nghĩa tiếng Việt'] || '')}</span></span><span class="c">${x.card.lapses}×</span></div>`;
+      }).join('') : '<p class="muted">Chưa có từ nào bị quên. Cứ thế phát huy.</p>'}
+      ${s.lapsy.length && lang !== 'all'
+        ? `<div class="row" style="margin-top:14px"><button class="primary" id="practice">Luyện riêng ${s.lapsy.length} từ này</button></div>`
+        : (s.lapsy.length ? '<p class="muted" style="margin-top:10px">Chọn Tiếng Anh hoặc Tiếng Hàn để luyện riêng nhóm từ này.</p>' : '')}
+    </div>`;
+}
+
+function drawStats() {
+  if (!statsOpen) return;
+  render(statsHTML(statsLang, statsNote));
+  $('#back').onclick = once(() => { statsOpen = false; viewHome(); });
+  app.querySelectorAll('.seg button').forEach(b => b.onclick = once(() => { statsLang = b.dataset.lang; drawStats(); }));
+  const p = $('#practice');
+  if (p) p.onclick = once(() => {
+    const ids = computeStats(statsLang).lapsy.map(x => x.raw.word_id);
+    statsOpen = false;
+    startCustom(statsLang, ids);
+  });
+}
+
+async function viewStats() {
+  statsOpen = true; statsNote = '';
+  render(`<div class="bar"><h1>Thống kê</h1><button class="ghost" id="back">Xong</button></div>
+    <div class="card"><p class="muted">Đang cập nhật số liệu…</p></div>`);
+  $('#back').onclick = once(() => { statsOpen = false; viewHome(); });
+  await flush(true);
+  if (!queueRead().length) {
+    try { await loadAll(); } catch (e) { statsNote = 'Không tải được dữ liệu mới, đang hiện số liệu đã có.'; }
+  } else {
+    statsNote = `${queueRead().length} thay đổi chưa gửi lên sheet nên số liệu có thể chưa mới.`;
+  }
+  drawStats();
+}
+
+function startCustom(lang, ids) {
+  const items = ids.map(id => DB.raw.find(r => r.word_id === id)).filter(Boolean)
+    .map(raw => ({ raw, card: cardOf(raw) }));
+  if (!items.length) { viewHome(); return; }
+  session = { lang, queue: items, done: 0, total: items.length, backlog: false, newCount: 0 };
+  nextCard();
+}
 
 /* ============================ KHỞI ĐỘNG ============================ */
 async function boot() {

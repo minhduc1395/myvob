@@ -202,6 +202,26 @@ button.tw:focus-visible{outline:2px solid #007aff;outline-offset:1px}
 .gloss b{font-weight:800;color:var(--ink)}
 .q{margin:16px 0 4px;font-weight:700}
 
+/* --- luyện thêm --- */
+.acts{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+button.act{display:flex;flex-direction:column;align-items:flex-start;gap:4px;text-align:left;padding:14px;border-radius:18px}
+button.act b{font-size:14px;font-weight:700}
+button.act span{font-size:11.5px;font-weight:500;color:rgba(28,28,46,.55);line-height:1.35}
+.match{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}
+.match .col{display:flex;flex-direction:column;gap:8px}
+button.mt{text-align:left;border-radius:14px;padding:12px;font-size:14px;font-weight:600;overflow-wrap:anywhere}
+button.mt.on{background:rgba(10,132,255,.18);border-color:rgba(10,132,255,.5)}
+button.mt.right{background:var(--ok-bg);border-color:var(--ok-br);color:var(--ok);opacity:.75}
+button.mt.wrong{background:var(--bad-bg);border-color:var(--bad-br);color:var(--bad)}
+.passage p{line-height:2.3;font-size:1.02rem;font-weight:500;margin:0 0 12px}
+input.blank-in{display:inline-block;width:auto;min-width:5ch;padding:2px 8px;margin:0 2px;border-radius:8px;font-weight:700;text-align:center;font-size:.95rem}
+input.blank-in.right{background:var(--ok-bg);border-color:var(--ok-br)}
+input.blank-in.near{background:var(--warn-bg);border-color:var(--warn-br)}
+input.blank-in.wrong{background:var(--bad-bg);border-color:var(--bad-br)}
+.fix{font-weight:800;color:var(--ok);margin:0 4px}
+button.chip{padding:4px 12px;font-size:13px;border-radius:9999px}
+mark.err{background:rgba(244,63,94,.2);color:#881337;border-radius:5px;padding:0 3px;font-weight:700}
+
 /* --- phím tắt --- */
 .k,.kbdhint{display:none}
 @media (hover:hover) and (pointer:fine){
@@ -256,7 +276,7 @@ button.tw:focus-visible{outline:2px solid #007aff;outline-offset:1px}
 <div id="app"></div>
 <script>
 /* ============================ CẤU HÌNH & TIỆN ÍCH ============================ */
-const APP_VERSION = '2026.10.05-6';   // tăng mỗi lần cập nhật để app tự nhận bản mới
+const APP_VERSION = '2026.10.05-8';   // tăng mỗi lần cập nhật để app tự nhận bản mới
 const LS = {
   cfg: 'vocab.cfg', queue: 'vocab.queue', stats: 'vocab.dailyStats'
 };
@@ -519,18 +539,19 @@ function modelChain() {
 }
 
 class GeminiError extends Error {
-  constructor(msg, { status = '', code = 0, fallback = true } = {}) { super(msg); this.status = status; this.code = code; this.fallback = fallback; }
+  constructor(msg, { status = '', code = 0, fallback = true, aborted = false } = {}) { super(msg); this.status = status; this.code = code; this.fallback = fallback; this.aborted = aborted; }
 }
 
-async function callModel(model, { feature, wordId, prompt, schema }) {
+async function callModel(model, { feature, wordId, prompt, schema, signal }) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${cfg.geminiKey}`;
   const body = { contents: [{ parts: [{ text: prompt }] }] };
   if (schema) body.generationConfig = { responseMimeType: 'application/json', responseSchema: schema };
   let json;
   try {
-    const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
     json = await res.json();
   } catch (e) {
+    if (e && e.name === 'AbortError') throw new GeminiError('Đã hủy.', { fallback: false, aborted: true });   // người dùng rời màn hình
     throw new GeminiError('Không kết nối được tới Gemini (kiểm tra mạng).', { fallback: false });
   }
   if (json.error) {
@@ -693,8 +714,8 @@ const costCols = u => ({ model: u.model, in_tokens: u.in_tokens, out_tokens: u.o
   thought_tokens: u.thought_tokens, cost_usd: u.cost_usd, cost_vnd: u.cost_vnd });
 const langNameOf = raw => raw['Ngôn ngữ'] === 'ko' ? 'tiếng Hàn' : 'tiếng Anh';
 
-async function enrich(raw) {
-  const { data, usage } = await callGemini({ feature: 'enrich', wordId: raw.word_id, prompt: enrichPrompt(raw, langNameOf(raw)), schema: ENRICH_SCHEMA });
+async function enrich(raw, signal) {
+  const { data, usage } = await callGemini({ feature: 'enrich', wordId: raw.word_id, prompt: enrichPrompt(raw, langNameOf(raw)), schema: ENRICH_SCHEMA, signal });
   const now = nowISO();
   const row = {
     word_id: raw.word_id, word: raw['Từ vựng'],
@@ -713,10 +734,10 @@ async function enrich(raw) {
 }
 
 // Làm mới: câu điền mới + ví dụ mới được thêm lên đầu (giữ tối đa 6), cụm đi kèm cộng dồn (tối đa 10).
-async function refreshEnrichment(raw) {
+async function refreshEnrichment(raw, signal) {
   const e = DB.enrichment[raw.word_id];
-  if (!e) return enrich(raw);
-  const { data, usage } = await callGemini({ feature: 'refresh', wordId: raw.word_id, prompt: refreshPrompt(raw, e, langNameOf(raw)), schema: ENRICH_SCHEMA });
+  if (!e) return enrich(raw, signal);
+  const { data, usage } = await callGemini({ feature: 'refresh', wordId: raw.word_id, prompt: refreshPrompt(raw, e, langNameOf(raw)), schema: ENRICH_SCHEMA, signal });
   const uniq = arr => [...new Map(arr.filter(Boolean).map(x => [norm(x), x])).values()];
   const oldCloze = e.cloze_sentence ? [e.cloze_sentence] : [];
   const now = nowISO();
@@ -854,6 +875,7 @@ const RATING = { 1: 'Quên', 2: 'Khó', 3: 'Được', 4: 'Dễ' };
 // Gõ sai dưới 15% ký tự tính là Được, sai nhiều hơn là Quên.
 const typeExtra = () => { const v = parseFloat(DB.settings.type_extra_sec); return isFinite(v) && v >= 0 ? v : 10; };
 function autoRating({ mode, exact, errorRatio = 1, ms }) {
+  if (mode === 'guess') return exact ? 3 : 2;      // đoán trước khi học: không phạt, chỉ phân biệt đoán đúng ý hay chưa
   const typing = mode === 'type';
   if (!exact) return (typing && errorRatio < 0.15) ? 3 : 1;
   const s = ms / 1000, b = typing ? typeExtra() : 0;
@@ -864,6 +886,7 @@ function autoRating({ mode, exact, errorRatio = 1, ms }) {
 }
 function ratingReason(m, g) {
   if (!m) return 'theo nhận xét của AI';
+  if (m.mode === 'guess') return m.skipped ? 'chưa đoán, bình thường với từ mới' : m.ov >= 0.5 ? 'đoán đúng ý' : m.ov > 0 ? 'đoán gần đúng' : 'đoán chưa đúng, bình thường với từ mới';
   const pct = Math.round(m.errorRatio * 100);
   if (!m.exact) {
     if (m.mode !== 'type') return 'chọn sai';
@@ -873,11 +896,11 @@ function ratingReason(m, g) {
 }
 
 /* ============================ PHÁT ÂM ============================ */
-function speak(text, lang) {
+function speak(text, lang, rate = 0.95) {
   if (!('speechSynthesis' in window)) return;
   const u = new SpeechSynthesisUtterance(text);
   u.lang = lang === 'ko' ? 'ko-KR' : 'en-US';
-  u.rate = 0.95;
+  u.rate = rate;
   speechSynthesis.cancel(); speechSynthesis.speak(u);
 }
 
@@ -904,6 +927,9 @@ function viewSetup(msg = '') {
 }
 
 function viewHome() {
+  endAct();
+  if (bulkCtrl) bulkCtrl.abort();                    // rời Cài đặt giữa chừng thì dừng làm giàu hàng loạt
+  if (story && story.ctrl) story.ctrl.abort();       // và hủy truyện đang viết dở
   const count = lang => {
     const t = new Date();
     const rows = DB.raw.filter(r => (r['Ngôn ngữ'] || 'en') === lang);
@@ -927,14 +953,15 @@ function viewHome() {
         </span>
         <span class="num ${d.due + Math.min(d.fresh, +DB.settings['daily_new_' + d.l] || 0) ? '' : 'zero'}">${d.due}</span>
       </button>`).join('') || '<div class="card">Chưa có từ nào trong sheet. Lưu vài từ rồi quay lại.</div>'}
-    ${storyHomeCard()}
+    ${practiceHub()}
     <p class="muted" id="syncState" style="margin-top:20px"></p>`);
   updateSyncBadge();
   atHome = true;
   app.querySelectorAll('.deck').forEach(b => b.onclick = once(() => startSession(b.dataset.lang)));
   $('#settings').onclick = once(viewSettings);
   $('#stats').onclick = once(() => { viewStats(); }); // không giữ khóa trong lúc tải dữ liệu
-  app.querySelectorAll('[data-story]').forEach(b => b.onclick = once(() => { startStory(b.dataset.story); }));
+  app.querySelectorAll('[data-act]').forEach(b => b.onclick = once(() => { startActivity(b.dataset.act, practiceLang); }));
+  app.querySelectorAll('[data-plang]').forEach(b => b.onclick = once(() => { practiceLang = b.dataset.plang; viewHome(); }));
 }
 
 function viewSettings() {
@@ -1028,24 +1055,30 @@ function aiDataCard() {
     ${cfg.geminiKey ? `<div class="row" style="margin-top:10px">
       ${missing.length ? `<button id="bulkEnrich">Làm giàu ${missing.length} từ</button>` : ''}
       ${stale.length ? `<button id="bulkRefresh">Làm mới ${stale.length} từ</button>` : ''}
+      <button id="bulkStop" class="hide">Dừng</button>
     </div>` : ''}
   </div>`;
 }
-let bulkRunning = false;
+let bulkRunning = false, bulkCtrl = null;
 async function bulkRun(mode) {
   if (bulkRunning) return;
   bulkRunning = true;
+  const ctrl = bulkCtrl = new AbortController();
   const list = aiDataLists()[mode === 'enrich' ? 'missing' : 'stale'];
   let ok = 0, fail = 0;
   const say = t => { const el = document.getElementById('bulkState'); if (el) el.textContent = t; };
+  const stop = document.getElementById('bulkStop');
+  if (stop) { stop.classList.remove('hide'); stop.onclick = () => ctrl.abort(); }
   for (const x of list) {
+    if (ctrl.signal.aborted) break;
     say(`Đang xử lý ${ok + fail + 1}/${list.length}: ${x.raw['Từ vựng']}…`);
-    try { mode === 'enrich' ? await enrich(x.raw) : await refreshEnrichment(x.raw); ok++; }
-    catch (err) { fail++; console.warn(err); }
+    try { mode === 'enrich' ? await enrich(x.raw, ctrl.signal) : await refreshEnrichment(x.raw, ctrl.signal); ok++; }
+    catch (err) { if (err && err.aborted) break; fail++; console.warn(err); }
   }
+  const stopped = ctrl.signal.aborted;
   await flush(true);
-  bulkRunning = false;
-  toast(`Xong: ${ok} từ${fail ? `, ${fail} từ lỗi` : ''}.`, 3000);
+  bulkRunning = false; bulkCtrl = null;
+  toast(`${stopped ? 'Đã dừng' : 'Xong'}: ${ok} từ${fail ? `, ${fail} từ lỗi` : ''}.`, 3000);
   if (document.getElementById('bulkState')) viewSettings();
 }
 
@@ -1140,8 +1173,6 @@ async function nextCard() {
     try { await enrich(item.raw); }
     catch (e) { enrichFailed.add(item.card.word_id); toast('Không gọi được Gemini: ' + e.message, 3500); }
   }
-  // Làm mới nền cho từ này và vài thẻ sắp tới (nếu đã quá hạn làm mới); không chặn màn hình.
-  scheduleRefresh([item, ...session.queue.slice(0, 3), ...(session.practice || []).slice(0, 2)]);
   showCard(item);
 }
 
@@ -1183,39 +1214,203 @@ function cardData(item) {
   return { e, raw, word, meaning, sentence, lang: raw['Ngôn ngữ'] || 'en' };
 }
 
-function showCard(item) {
-  item._token = (item._token || 0) + 1;   // mỗi lần hiện thẻ có một mã riêng; commit chỉ nhận mỗi mã một lần
-  const d = cardData(item);
-  const stage = item.card.stage ?? 0;
-  const started = Date.now();
-  const head = `
-    <div class="progress"><i style="width:${progressPct(0)}%"></i></div>
-    <div class="bar"><span class="muted">${item._scored
-      ? `${session.done + 1}/${session.total} · ${item.card.state === 'new' ? 'từ mới' : 'ôn tập'}`
-      : `<span class="pill accent">Ôn thêm · không tính điểm</span> ${session.practiced ? '· đã ôn thêm ' + session.practiced : ''}`}</span>
-    <button class="ghost" id="quit">Dừng</button></div>`;
+/* ============================ DẠNG BÀI TRONG VÒNG ÔN CHÍNH ============================
+   Mỗi cấp (stage) có vài cách hỏi khác nhau; app xoay vòng theo số lần đã ôn của từ, và chỉ dùng
+   cách nào đủ dữ liệu. Từ mới (chưa học) bắt đầu bằng "đoán nghĩa trước". */
+const STOP = new Set(['la', 'cua', 'mot', 'cac', 'nhung', 'su', 'viec', 'cai', 'duoc', 'va', 'co', 'khong', 'rat', 'nhu', 'de', 'trong', 'cho', 'den', 'voi']);
+const stripVi = s => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd');
+const toks = s => stripVi(s).split(/[^a-z0-9]+/).filter(t => t && !STOP.has(t));
+// Tỷ lệ các từ trong nghĩa chuẩn mà người học đoán trúng (bỏ dấu, bỏ từ đệm).
+function guessOverlap(guess, targets) {
+  const g = new Set(toks(guess));
+  if (!g.size) return 0;
+  return Math.max(0, ...targets.filter(Boolean).map(t => {
+    const tt = toks(t);
+    return tt.length ? tt.filter(x => g.has(x)).length / tt.length : 0;
+  }));
+}
 
-  const finish = (rating, extra = '', metrics = null) => reveal(item, d, rating, extra, metrics);
+const POSVI = { n: 'danh từ', v: 'động từ', adj: 'tính từ', adv: 'phó từ' };
+const synHeads = e => listOf(e.synonyms).map(x => x.replace(/\s*[(（].*$/, '').trim()).filter(Boolean);
+function parseFamily(s) {
+  return String(s || '').split(/[,;，]/).map(x => x.trim()).map(x => {
+    const m = x.match(/^(.+?)\s*\(\s*(n|v|adj|adv)\.?\s*\)$/i);
+    return m ? { form: m[1].trim(), pos: m[2].toLowerCase() } : null;
+  }).filter(Boolean);
+}
+function familyTarget(item, d) {
+  if (/\s/.test(d.word)) return null;                      // chỉ áp dụng cho từ đơn
+  const fam = parseFamily(d.e.word_family).filter(f => norm(f.form) !== norm(d.word) && !/\s/.test(f.form));
+  if (!fam.length) return null;
+  const t = fam[(item.card.reps || 0) % fam.length];
+  return { ...t, accepted: fam.filter(f => f.pos === t.pos).map(f => f.form) };
+}
 
-  if (stage === 0) {
-    const others = DB.raw.filter(r => r.word_id !== d.raw.word_id)
-      .map(r => (DB.enrichment[r.word_id]?.meaning_fixed) || r['Nghĩa tiếng Việt']).filter(Boolean);
-    const opts = [d.meaning, ...shuffle(others).slice(0, 3)];
+function availableExercises(item, d) {
+  const e = d.e, sent = d.sentence || '', def = String(e.definition_en || '');
+  const hasW = !!sent && rx(d.word).test(sent);
+  return {
+    choice: true,
+    guess: item.card.state === 'new' && !!d.meaning && !!d.raw['Câu / Ngữ cảnh'],
+    nuance: synHeads(e).filter(x => norm(x) !== norm(d.word)).length >= 2 && def.length > 8 && hasW,
+    cloze: true,
+    dictation: hasW && typeof window !== 'undefined' && 'speechSynthesis' in window,
+    recall: true,
+    defguess: def.length > 8,
+    family: !!familyTarget(item, d),
+    write: true
+  };
+}
+const EX_TIERS = [['choice', 'nuance'], ['cloze', 'dictation'], ['recall', 'defguess', 'family'], ['write']];
+function pickExercise(item, d) {
+  const a = availableExercises(item, d);
+  if (item.card.state === 'new' && a.guess) return 'guess';
+  const tier = EX_TIERS[clamp(item.card.stage ?? 0, 0, 3)];
+  const list = tier.filter(k => a[k]);
+  return list.length ? list[(item.card.reps || 0) % list.length] : tier[0];
+}
+
+// Mọi bài "gõ từ" dùng chung một khung: cloze, nhớ từ theo nghĩa, đoán qua định nghĩa, đổi dạng từ, nghe chép.
+function typedEx({ item, d, head, started, finish }, { hint, label = 'Gõ từ', accepted, audio = false }) {
+  render(head + `
+    <div class="card">
+      ${hint}
+      <label for="ans">${label}</label>
+      <input id="ans" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+      <div class="row" style="margin-top:12px">
+        ${audio ? '<button id="again">🔊 Nghe lại, chậm hơn</button>' : ''}
+        <button class="primary" id="ok">Kiểm tra</button>
+      </div>
+    </div>`);
+  $('#ans').focus();
+  const submit = () => {
+    const r = checkAnswer($('#ans').value, accepted);
+    const len = Math.max(norm(accepted[0]).length, 1);
+    const m = { mode: 'type', exact: r.exact, errorRatio: Math.min(1, r.dist / len), ms: Date.now() - started };
+    finish(autoRating(m), '', m);
+  };
+  const guarded = once(submit);
+  $('#ok').onclick = guarded;
+  // Enter chỉ nộp khi đã gõ gì đó (tránh lỡ tay tính là Quên) và không đang trong lúc gõ dấu/Hangul.
+  $('#ans').onkeydown = e => { if (enterOK(e) && $('#ans').value.trim()) guarded(); };
+  if (audio) {
+    speak(d.sentence, d.lang);
+    $('#again').onclick = () => speak(d.sentence, d.lang, 0.7);
+  }
+}
+
+function choiceEx({ item, d, head, started, finish }, { hint, options, answer }) {
+  render(head + `
+    <div class="card">
+      ${hint}
+      <div id="opts">${options.map((o, i) => `<button class="choice" data-v="${esc(o)}"><span class="k">${i + 1}</span>${esc(o)}</button>`).join('')}</div>
+      <p class="muted kbdhint">Bấm phím 1–${options.length} để chọn nhanh</p>
+    </div>`);
+  app.querySelectorAll('.choice').forEach(b => b.onclick = once(() => {
+    const ok = b.dataset.v === answer;
+    b.classList.add(ok ? 'right' : 'wrong');
+    const m = { mode: 'choice', exact: ok, errorRatio: ok ? 0 : 1, ms: Date.now() - started };
+    finish(autoRating(m), '', m);
+  }));
+}
+
+const EX = {
+  // Từ mới: đoán trước khi xem đáp án (kiểm tra trước giúp nhớ đáp án đúng lâu hơn)
+  guess({ d, head, started, finish }) {
     render(head + `
       <div class="card">
-        <div class="word">${esc(d.word)}</div>
-        ${d.sentence ? `<p class="context">${highlight(d.sentence, d.word)}</p>` : ''}
-        <p class="muted">Nghĩa nào đúng trong câu này?</p>
-        <div id="opts">${shuffle(opts).map((o, i) => `<button class="choice" data-v="${esc(o)}"><span class="k">${i + 1}</span>${esc(o)}</button>`).join('')}</div>
-        <p class="muted kbdhint">Bấm phím 1–4 để chọn nhanh</p>
+        <span class="pill accent">Từ mới</span>
+        <div class="word" style="margin-top:8px">${esc(d.word)}</div>
+        ${d.raw['Câu / Ngữ cảnh'] ? `<p class="context">${highlight(d.raw['Câu / Ngữ cảnh'], d.word)}</p>` : ''}
+        <p class="muted">Đoán xem từ này nghĩa là gì. Đoán sai cũng không sao: cố đoán trước giúp bạn nhớ đáp án lâu hơn.</p>
+        <input id="ans" placeholder="Nghĩa tiếng Việt bạn đoán…" autocomplete="off">
+        <div class="row" style="margin-top:12px"><button id="skip">Chưa biết</button><button class="primary" id="ok">Đoán</button></div>
       </div>`);
-    app.querySelectorAll('.choice').forEach(b => b.onclick = once(() => {
-      const ok = b.dataset.v === d.meaning;
-      b.classList.add(ok ? 'right' : 'wrong');
-      const m = { mode: 'choice', exact: ok, errorRatio: ok ? 0 : 1, ms: Date.now() - started };
-      finish(autoRating(m), '', m);
-    }));
-  } else if (stage === 3) {
+    $('#ans').focus();
+    const go = skipped => {
+      const text = skipped ? '' : $('#ans').value.trim();
+      const ov = guessOverlap(text, [d.meaning, d.raw['Nghĩa tiếng Việt']]);
+      const m = { mode: 'guess', exact: ov >= 0.5, ov, skipped: skipped || !text, ms: Date.now() - started };
+      finish(autoRating(m), text ? `<p class="muted">Bạn đoán: “${esc(text)}”</p>` : '', m);
+    };
+    $('#ok').onclick = once(() => go(false));
+    $('#skip').onclick = once(() => go(true));
+    $('#ans').onkeydown = e => { if (enterOK(e) && $('#ans').value.trim()) $('#ok').click(); };
+  },
+
+  choice(c) {
+    const { d } = c;
+    const others = DB.raw.filter(r => r.word_id !== d.raw.word_id)
+      .map(r => (DB.enrichment[r.word_id]?.meaning_fixed) || r['Nghĩa tiếng Việt']).filter(Boolean);
+    choiceEx(c, {
+      hint: `<div class="word">${esc(d.word)}</div>
+        ${d.sentence ? `<p class="context">${highlight(d.sentence, d.word)}</p>` : ''}
+        <p class="muted">Nghĩa nào đúng trong câu này?</p>`,
+      options: shuffle([d.meaning, ...shuffle(others).slice(0, 3)]), answer: d.meaning
+    });
+  },
+
+  // Chọn từ đúng sắc thái trong các từ gần nghĩa
+  nuance(c) {
+    const { d } = c;
+    const heads = [...new Set(synHeads(d.e).filter(x => norm(x) !== norm(d.word)))].slice(0, 3);
+    choiceEx(c, {
+      hint: `<p class="context">${blankOut(d.sentence, d.word)}</p>
+        <p class="muted">Gợi ý: ${blankOut(d.e.definition_en, d.word)}</p>
+        <p class="muted">Từ nào hợp nhất với chỗ trống?</p>`,
+      options: shuffle([d.word, ...heads]), answer: d.word
+    });
+  },
+
+  cloze(c) {
+    const { d } = c;
+    typedEx(c, {
+      hint: `<p class="context">${blankOut(d.sentence, d.word)}</p><p class="muted">${esc(d.meaning)} · bắt đầu bằng “${esc(d.word.slice(0, 1))}”</p>`,
+      accepted: [d.word, d.e.base_form]
+    });
+  },
+
+  // Nghe câu rồi gõ từ còn thiếu
+  dictation(c) {
+    const { d } = c;
+    typedEx(c, {
+      hint: `<p class="muted">Nghe câu và gõ từ còn thiếu.</p><p class="context">${blankOut(d.sentence, d.word)}</p>`,
+      label: 'Từ bạn nghe được', accepted: [d.word, d.e.base_form], audio: true
+    });
+  },
+
+  recall(c) {
+    const { d } = c;
+    typedEx(c, {
+      hint: `<div class="meaning">${esc(d.meaning)}</div>${d.e.emoji ? `<p style="font-size:1.6rem;margin:4px 0">${esc(d.e.emoji)}</p>` : ''}`,
+      accepted: [d.word, d.e.base_form]
+    });
+  },
+
+  // Đoán từ qua định nghĩa tiếng Anh (không qua tiếng Việt)
+  defguess(c) {
+    const { d } = c;
+    typedEx(c, {
+      hint: `<p class="muted">Định nghĩa${d.e.pos ? ' · ' + esc(d.e.pos) : ''}</p>
+        <p class="context">${blankOut(d.e.definition_en, d.word)}</p>
+        <p class="muted">bắt đầu bằng “${esc(d.word.slice(0, 1))}”</p>`,
+      label: 'Từ nào có nghĩa này?', accepted: [d.word, d.e.base_form]
+    });
+  },
+
+  // Đổi dạng từ trong cùng họ từ
+  family(c) {
+    const { item, d } = c;
+    const t = familyTarget(item, d);
+    typedEx(c, {
+      hint: `<p class="muted">Từ đang học</p><div class="word" style="font-size:1.5rem">${esc(d.word)}</div>
+        <p class="muted">${esc(d.meaning)}</p>
+        <p class="context">Gõ dạng <b>${POSVI[t.pos]}</b> cùng họ từ.</p>`,
+      label: 'Dạng ' + POSVI[t.pos], accepted: t.accepted
+    });
+  },
+
+  write({ d, head, finish }) {
     render(head + `
       <div class="card">
         <div class="meaning">${esc(d.meaning)}</div>
@@ -1237,29 +1432,22 @@ function showCard(item) {
         fb ? `<p class="verdict ${fb.score >= 2 ? 'ok' : 'no'}">${esc(fb.feedback_vi)}</p>
               <p class="context">${esc(fb.corrected)}</p>` : '');
     });
-  } else {
-    const hint = stage === 1
-      ? `<p class="context">${blankOut(d.sentence, d.word)}</p><p class="muted">${esc(d.meaning)} · bắt đầu bằng “${esc(d.word.slice(0, 1))}”</p>`
-      : `<div class="meaning">${esc(d.meaning)}</div>${d.e.emoji ? `<p style="font-size:1.6rem;margin:4px 0">${esc(d.e.emoji)}</p>` : ''}`;
-    render(head + `
-      <div class="card">
-        ${hint}
-        <label for="ans">Gõ từ</label>
-        <input id="ans" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
-        <div class="row" style="margin-top:12px"><button class="primary" id="ok">Kiểm tra</button></div>
-      </div>`);
-    $('#ans').focus();
-    const submit = () => {
-      const r = checkAnswer($('#ans').value, [d.word, d.e.base_form]);
-      const len = Math.max(norm(d.word).length, 1);
-      const m = { mode: 'type', exact: r.exact, errorRatio: Math.min(1, r.dist / len), ms: Date.now() - started };
-      finish(autoRating(m), '', m);
-    };
-    const guarded = once(submit);
-    $('#ok').onclick = guarded;
-    // Enter chỉ nộp khi đã gõ gì đó (tránh lỡ tay tính là Quên) và không đang trong lúc gõ dấu/Hangul.
-    $('#ans').onkeydown = e => { if (enterOK(e) && $('#ans').value.trim()) guarded(); };
   }
+};
+
+function showCard(item) {
+  item._token = (item._token || 0) + 1;   // mỗi lần hiện thẻ có một mã riêng; commit chỉ nhận mỗi mã một lần
+  const d = cardData(item);
+  const started = Date.now();
+  const head = `
+    <div class="progress"><i style="width:${progressPct(0)}%"></i></div>
+    <div class="bar"><span class="muted">${item._scored
+      ? `${session.done + 1}/${session.total} · ${item.card.state === 'new' ? 'từ mới' : 'ôn tập'}`
+      : `<span class="pill accent">Ôn thêm · không tính điểm</span> ${session.practiced ? '· đã ôn thêm ' + session.practiced : ''}`}</span>
+    <button class="ghost" id="quit">Dừng</button></div>`;
+  const finish = (rating, extra = '', metrics = null) => reveal(item, d, rating, extra, metrics);
+  item._ex = pickExercise(item, d);
+  EX[item._ex]({ item, d, head, started, finish });
   $('#quit').onclick = once(() => { flush(true); viewHome(); });
 }
 
@@ -1328,7 +1516,7 @@ async function commit(item, d, g, token) {
   const stageBefore = item.card.stage ?? 0;
   enqueue('appendLog', {
     ts: nowISO(), word_id: item.card.word_id,
-    exercise: ['choice', 'cloze', 'recall', 'produce'][stageBefore],
+    exercise: item._ex || ['choice', 'cloze', 'recall', 'write'][stageBefore],
     rating: g, correct: g > 1 ? 'true' : 'false', answer: '', ms: item._ms ?? '',
     mode: scored ? 'scored' : 'practice'
   });
@@ -1351,6 +1539,7 @@ async function commit(item, d, g, token) {
     if (g === 1) session.practice.splice(Math.min(3, session.practice.length), 0, item); // quên thì gặp lại sau vài thẻ
   }
   session.current = null;
+  scheduleRefresh([item]);   // chỉ làm mới đúng thẻ bạn vừa làm xong (nếu quá hạn), không đoán trước thẻ sắp tới
   flush();          // gửi nền, không chờ
   nextCard();
 }
@@ -1612,17 +1801,6 @@ function learnedCards(lang) {
     .filter(x => x.card.suspended !== 'true' && x.card.state !== 'new');
 }
 
-function storyHomeCard() {
-  const langs = ['en', 'ko'].filter(l => learnedCards(l).length >= 3);
-  return `<div class="card">
-    <h3>Ôn bằng truyện ngắn</h3>
-    <p class="muted">AI viết một truyện ngắn, tự nhiên như người bản xứ, dùng các từ bạn vừa học. Có bản dịch và 3 câu hỏi đọc hiểu. Không tính vào lịch ôn.</p>
-    ${langs.length
-      ? `<div class="row" style="margin-top:12px">${langs.map(l => `<button data-story="${l}">Truyện ${LANG_NAME[l]}</button>`).join('')}</div>`
-      : '<p class="muted">Học ít nhất 3 từ để mở phần này.</p>'}
-  </div>`;
-}
-
 // Ưu tiên từ vừa ôn trong phiên; không có thì lấy từ ôn trong 48 giờ qua; thiếu thì bù bằng từ sắp quên nhất.
 function pickStoryWords(lang, preferIds = []) {
   const all = learnedCards(lang);
@@ -1691,17 +1869,17 @@ async function startStory(lang, preferIds = []) {
   const items = pickStoryWords(lang, preferIds);
   if (items.length < 3) { toast('Cần ít nhất 3 từ đã học để viết truyện.'); return; }
   const token = {};
-  story = { token, lang, items, data: null, looked: new Set(), answered: {}, showTr: false };
+  story = { token, lang, items, data: null, looked: new Set(), answered: {}, showTr: false, ctrl: new AbortController() };
   render(`<div class="bar"><h1>Truyện ngắn</h1><button class="ghost" id="back">Xong</button></div>
     <div class="card"><p class="muted">Đang viết truyện với ${items.length} từ: ${items.map(x => esc(x.raw['Từ vựng'])).join(', ')}…</p></div>`);
-  $('#back').onclick = once(() => { story = null; viewHome(); });
+  $('#back').onclick = once(() => { if (story && story.ctrl) story.ctrl.abort(); story = null; viewHome(); });
   try {
-    const { data } = await callGemini({ feature: 'story', prompt: storyPrompt(lang, items), schema: STORY_SCHEMA });
+    const { data } = await callGemini({ feature: 'story', prompt: storyPrompt(lang, items), schema: STORY_SCHEMA, signal: story.ctrl.signal });
     if (!story || story.token !== token) return;          // người dùng đã rời màn hình
     story.data = data;
     drawStory();
   } catch (e) {
-    if (!story || story.token !== token) return;
+    if (e.aborted || !story || story.token !== token) return;
     render(`<div class="bar"><h1>Truyện ngắn</h1><button class="ghost" id="back">Xong</button></div>
       <div class="card"><p class="verdict no">Không viết được truyện: ${esc(e.message)}</p>
       <div class="row"><button class="primary" id="retry">Thử lại</button></div></div>`);
@@ -1799,6 +1977,503 @@ function finishStory() {
   });
   dailyStat('practice', s.items.length);
   flush(true);
+}
+
+/* ============================ LUYỆN THÊM: CÁC BÀI TẬP RIÊNG ============================
+   Tất cả là ôn thêm: chỉ ghi log (mode = practice), không đổi lịch ôn của từ. */
+let act = null, practiceLang = 'en';
+function endAct() {
+  if (act && act.ctrl) act.ctrl.abort();             // hủy request AI đang chờ
+  if (act && act.timer) clearInterval(act.timer);
+  act = null;
+  if (typeof window !== 'undefined' && window.speechSynthesis) speechSynthesis.cancel();
+}
+const meaningOf = x => (DB.enrichment[x.raw.word_id] || {}).meaning_fixed || x.raw['Nghĩa tiếng Việt'] || '';
+const fmtTime = ms => { const s = Math.round(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+const actBar = title => `<div class="bar"><h1>${esc(title)}</h1><button class="ghost" id="back">Xong</button></div>`;
+const wireBack = () => { const b = $('#back'); if (b) b.onclick = once(() => { endAct(); viewHome(); }); };
+
+// Các từ đã học, sắp theo khả năng nhớ thấp nhất (sắp quên nhất) lên trước.
+function learnedPool(lang, filter = () => true) {
+  return learnedCards(lang).filter(filter).map(x => {
+    const el = x.card.last_review ? days(new Date(), x.card.last_review) : 0;
+    return { ...x, R: x.card.S > 0 ? retrievability(el, x.card.S) : 0 };
+  }).sort((a, b) => a.R - b.R);
+}
+// Lấy từ trong nhóm sắp quên nhất rồi xáo, để mỗi lần chơi không giống hệt nhau.
+function pickPractice(lang, n, filter) {
+  return shuffle(learnedPool(lang, filter).slice(0, n * 2)).slice(0, n);
+}
+function logPractice(rows) {
+  const t = Date.now();
+  rows.forEach((r, i) => enqueue('appendLog', {
+    ts: new Date(t + i).toISOString(), word_id: r.word_id, exercise: r.exercise,
+    rating: r.rating, correct: r.rating > 1 ? 'true' : 'false', answer: '', ms: r.ms ?? '', mode: 'practice'
+  }));
+  dailyStat('practice', rows.length);
+  flush();
+}
+function actLoading(title, text) {
+  render(actBar(title) + `<div class="card"><p class="muted">${esc(text)}</p></div>`);
+  wireBack();
+}
+function actError(title, msg, retry, skip) {
+  render(actBar(title) + `<div class="card"><p class="verdict no">${esc(msg)}</p><div class="row"><button class="primary" id="retry">Thử lại</button>${skip ? '<button id="skip">Bỏ qua từ này</button>' : ''}</div></div>`);
+  wireBack();
+  $('#retry').onclick = once(() => { retry(); });
+  if (skip) $('#skip').onclick = once(() => { skip(); });
+}
+function actSummary(title, headline, lines, again) {
+  render(actBar(title) + `<div class="card"><h2>${esc(headline)}</h2>
+    ${lines.map(l => `<p class="muted">${l}</p>`).join('')}
+    <p class="muted">Chỉ ghi lại để thống kê, không đổi lịch ôn của từ.</p>
+    <div class="row" style="margin-top:12px"><button class="primary" id="again">Chơi tiếp</button><button id="home2">Về trang chủ</button></div></div>`);
+  wireBack();
+  $('#again').onclick = once(() => { again(); });
+  $('#home2').onclick = once(() => { endAct(); viewHome(); });
+}
+const rateOf = (ok, ms) => autoRating({ mode: 'choice', exact: ok, errorRatio: ok ? 0 : 1, ms });
+
+/* ----- Trang chủ: khối "Luyện thêm" ----- */
+const examplePairs = e => listOf(e.examples).map(s => {
+  const m = s.match(/^(.*\S)\s*\(([^()]+)\)\s*$/);
+  return m ? { en: m[1].trim(), vi: m[2].trim() } : null;
+}).filter(x => x && /[ăâđêôơưáàảãạéèẻẽẹíìỉĩịóòỏõọúùủũụýỳỷỹỵ]/i.test(x.vi));
+const translatePool = lang => learnedPool(lang, x => examplePairs(DB.enrichment[x.raw.word_id] || {}).length > 0);
+const hanvietOf = x => String((DB.enrichment[x.raw.word_id] || {}).hanviet || '').trim();
+const hanvietPool = () => learnedPool('ko', x => hanvietOf(x));
+
+function sourcesList(lang) {
+  const by = {};
+  learnedPool(lang).forEach(x => {
+    const u = x.raw['Nguồn (URL)'];
+    if (!u) return;
+    const s = by[u] || (by[u] = { url: u, title: x.raw['Tiêu đề trang'] || u, items: [], R: 9 });
+    s.items.push(x); s.R = Math.min(s.R, x.R);
+  });
+  return Object.values(by).filter(s => s.items.length >= 2).sort((a, b) => a.R - b.R);
+}
+
+function practiceHub() {
+  const langs = ['en', 'ko'].filter(l => learnedCards(l).length >= 3);
+  if (!langs.length) return `<div class="card"><h3>Luyện thêm</h3><p class="muted">Học ít nhất 3 từ để mở phần này.</p></div>`;
+  if (!langs.includes(practiceLang)) practiceLang = langs[0];
+  const L = practiceLang, ai = !!cfg.geminiKey;
+  const acts = [
+    ['story', 'Truyện ngắn', 'AI viết truyện dùng các từ bạn vừa học', ai],
+    ['passage', 'Đoạn gốc', 'Điền các từ đã lưu vào đoạn văn bạn từng đọc', sourcesList(L).length > 0],
+    ['match', 'Ghép cặp', 'Nối từ với nghĩa, tính giờ', learnedCards(L).length >= 4],
+    ['error', 'Tìm và sửa lỗi', 'AI viết câu dùng sai từ, bạn chọn cách sửa', ai],
+    ['translate', 'Dịch ngược', 'Dịch câu tiếng Việt sang ' + LANG_NAME[L], ai && translatePool(L).length >= 2],
+    ['diary', 'Nhật ký 3 câu', 'Viết 3 câu về chính bạn, AI sửa', ai],
+    ['hanviet', 'Hán Việt', 'Ghép từ gốc Hán với âm Hán Việt', L === 'ko' && hanvietPool().length >= 3]
+  ].filter(a => a[3]);
+  return `<div class="card">
+    <h3>Luyện thêm</h3>
+    <p class="muted">Các cách ôn khác để gặp từ theo nhiều kiểu. Không tính vào lịch ôn.</p>
+    ${langs.length > 1 ? `<div class="seg" style="margin-top:12px">${langs.map(l => `<button data-plang="${l}" class="${l === L ? 'on' : ''}">${l === 'en' ? 'Tiếng Anh' : 'Tiếng Hàn'}</button>`).join('')}</div>` : ''}
+    <div class="acts">${acts.map(([k, n, desc]) => `<button class="act" data-act="${k}"><b>${n}</b><span>${desc}</span></button>`).join('')}</div>
+    ${!ai ? '<p class="muted" style="margin-top:10px">Nhập Gemini API key (Cài đặt → Kết nối) để mở thêm các bài dùng AI.</p>' : ''}
+  </div>`;
+}
+
+function startActivity(key, lang) {
+  endAct();
+  const map = {
+    story: () => startStory(lang), passage: () => viewSources(lang), match: () => startMatch(lang),
+    error: () => startError(lang), translate: () => startTranslate(lang), diary: () => startDiary(lang),
+    hanviet: () => startHanviet(lang)
+  };
+  if (map[key]) map[key]();
+}
+
+/* ----- Ghép cặp tính giờ ----- */
+function startMatch(lang) {
+  const items = pickPractice(lang, 6, x => !!meaningOf(x));
+  if (items.length < 4) { toast('Cần ít nhất 4 từ đã học để chơi.'); return; }
+  endAct();
+  act = { key: 'match', lang, items, left: shuffle(items.slice()), right: shuffle(items.slice()),
+          done: new Set(), mistakes: {}, errors: 0, sel: null, t0: Date.now(), token: {} };
+  drawMatch();
+  act.timer = setInterval(() => {
+    const el = document.getElementById('timer');
+    if (el && act) el.textContent = fmtTime(Date.now() - act.t0);
+  }, 500);
+}
+function drawMatch() {
+  const a = act;
+  render(actBar('Ghép cặp') + `
+    <div class="card">
+      <div class="row" style="align-items:center"><span class="muted">Chạm một từ, rồi chạm nghĩa của nó.</span><span class="pill accent" id="timer" style="flex:0 0 auto">0:00</span></div>
+      <div class="match">
+        <div class="col">${a.left.map(x => `<button class="mt" data-side="l" data-id="${x.raw.word_id}">${esc(x.raw['Từ vựng'])}</button>`).join('')}</div>
+        <div class="col">${a.right.map(x => `<button class="mt" data-side="r" data-id="${x.raw.word_id}">${esc(meaningOf(x))}</button>`).join('')}</div>
+      </div>
+    </div>`);
+  wireBack();
+  app.querySelectorAll('.mt').forEach(b => b.onclick = () => onMatchTap(b));
+}
+function onMatchTap(b) {
+  const a = act;
+  if (!a || a.key !== 'match' || b.disabled) return;
+  const side = b.dataset.side, id = b.dataset.id;
+  if (a.sel && a.sel.side === side) { a.sel.el.classList.remove('on'); a.sel = null; }   // đổi lựa chọn trong cùng một cột
+  if (!a.sel) { a.sel = { side, id, el: b }; b.classList.add('on'); return; }
+  const first = a.sel;
+  a.sel = null;
+  first.el.classList.remove('on');
+  if (first.id === id) {
+    [first.el, b].forEach(x => { x.classList.add('right'); x.disabled = true; });
+    a.done.add(id);
+    if (a.done.size === a.items.length) finishMatch();
+  } else {
+    const leftId = first.side === 'l' ? first.id : id;
+    a.mistakes[leftId] = (a.mistakes[leftId] || 0) + 1;
+    a.errors++;
+    [first.el, b].forEach(x => x.classList.add('wrong'));
+    setTimeout(() => [first.el, b].forEach(x => x.classList.remove('wrong')), 450);
+  }
+}
+function finishMatch() {
+  const a = act;
+  clearInterval(a.timer);
+  const ms = Date.now() - a.t0;
+  logPractice(a.items.map(x => {
+    const m = a.mistakes[x.raw.word_id] || 0;
+    return { word_id: x.raw.word_id, exercise: 'match', rating: m === 0 ? 3 : m === 1 ? 2 : 1, ms: Math.round(ms / a.items.length) };
+  }));
+  const wrong = a.items.filter(x => a.mistakes[x.raw.word_id]);
+  actSummary('Ghép cặp', `Xong trong ${fmtTime(ms)}`,
+    [a.errors ? `Nối nhầm ${a.errors} lần.` : 'Không nối nhầm lần nào.',
+     ...(wrong.length ? ['Cần xem lại: ' + wrong.map(x => `<b>${esc(x.raw['Từ vựng'])}</b> (${esc(meaningOf(x))})`).join(', ')] : [])],
+    () => startMatch(a.lang));
+}
+
+/* ----- Đoạn gốc: điền nhiều chỗ trống ----- */
+function trimToSentence(s) {
+  s = String(s || '').trim();
+  const m = s.match(/^([\s\S]*[.!?。！？])[^.!?。！？]*$/);
+  return m && m[1].length > s.length * 0.5 ? m[1].trim() : s;
+}
+const escRx = s => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// Ghép các đoạn ngữ cảnh gốc của cùng một bài, rồi che mọi từ đã lưu (kể cả dạng chia như số nhiều).
+function buildPassage(items) {
+  const snippets = [];
+  items.slice().sort((a, b) => new Date(a.raw['Thời gian']) - new Date(b.raw['Thời gian'])).forEach(x => {
+    const t = trimToSentence(x.raw['Câu / Ngữ cảnh']);
+    if (!t) return;
+    const i = snippets.findIndex(s => s.includes(t) || t.includes(s));
+    if (i > -1) { if (t.length > snippets[i].length) snippets[i] = t; return; }
+    snippets.push(t);
+  });
+  const byWord = new Map(items.map(x => [norm(x.raw['Từ vựng']), x]));
+  const words = [...byWord.values()].map(x => x.raw['Từ vựng']).sort((a, b) => b.length - a.length);
+  const re = new RegExp('(?<![\\p{L}\\p{N}])(' + words.map(escRx).join('|') + ')[\\p{L}]*', 'giu');
+  const blanks = [];
+  const html = snippets.map(t => {
+    let out = '', last = 0, m;
+    re.lastIndex = 0;
+    while ((m = re.exec(t))) {
+      const it = byWord.get(norm(m[1]));
+      if (!it) continue;
+      out += esc(t.slice(last, m.index));
+      out += `<input class="blank-in" data-i="${blanks.length}" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" style="width:${Math.max(6, m[0].length + 2)}ch">`;
+      blanks.push({ id: it.raw.word_id, surface: m[0], base: it.raw['Từ vựng'] });
+      last = m.index + m[0].length;
+    }
+    return `<p>${out}${esc(t.slice(last))}</p>`;
+  }).join('');
+  return { html, blanks };
+}
+function gradeBlanks(blanks, values) {
+  const per = {}, kinds = blanks.map((b, i) => {
+    const r = checkAnswer(values[i] || '', [b.surface, b.base]);
+    const k = r.exact ? 'ok' : (r.near ? 'near' : 'bad');
+    (per[b.id] || (per[b.id] = { ok: 0, near: 0, bad: 0 }))[k]++;
+    return k;
+  });
+  const rows = Object.entries(per).map(([id, c]) => ({ word_id: id, exercise: 'passage', rating: c.bad ? 1 : c.near ? 2 : 3 }));
+  return { kinds, rows, ok: kinds.filter(k => k === 'ok').length };
+}
+function viewSources(lang) {
+  const list = sourcesList(lang);
+  if (!list.length) { toast('Chưa có bài nào có từ 2 từ đã học trở lên.'); return; }
+  endAct();
+  act = { key: 'sources', token: {} };
+  render(actBar('Đoạn gốc') + `<div class="card"><p class="muted">Chọn một bài bạn đã đọc. App ghép lại đoạn văn gốc và che các từ bạn đã lưu trong bài.</p>
+    ${list.map((s, i) => `<button class="choice" data-i="${i}">${esc(s.title.slice(0, 90))}<span class="muted"> · ${s.items.length} từ</span></button>`).join('')}</div>`);
+  wireBack();
+  app.querySelectorAll('.choice').forEach(b => b.onclick = once(() => startPassage(lang, list[+b.dataset.i])));
+}
+function startPassage(lang, src) {
+  const built = buildPassage(src.items);
+  if (built.blanks.length < 2) { toast('Đoạn văn này quá ngắn để làm bài.'); return; }
+  endAct();
+  act = { key: 'passage', token: {}, lang, src, built, blanks: built.blanks, focus: null, t0: Date.now() };
+  drawPassage();
+}
+function drawPassage() {
+  const a = act, bank = shuffle([...new Set(a.blanks.map(b => b.base))]);
+  render(actBar('Đoạn gốc') + `<div class="card passage">
+    <p class="muted"><a href="${esc(a.src.url)}" target="_blank" rel="noopener">${esc(a.src.title.slice(0, 80))}</a></p>
+    ${a.built.html}
+    <div class="pills" id="bank">${bank.map(w => `<button class="chip" data-w="${esc(w)}">${esc(w)}</button>`).join('')}</div>
+    <div class="row" style="margin-top:14px"><button id="bankToggle">Ẩn gợi ý</button><button class="primary" id="check">Kiểm tra</button></div>
+    <div id="res"></div></div>`);
+  wireBack();
+  const inputs = [...app.querySelectorAll('input.blank-in')];
+  inputs.forEach(inp => { inp.onfocus = () => { a.focus = inp; }; });
+  app.querySelectorAll('.chip').forEach(c => c.onclick = () => {
+    const target = (a.focus && !a.focus.value) ? a.focus : inputs.find(i => !i.value);
+    if (target) { target.value = c.dataset.w; const next = inputs.find(i => !i.value); if (next) next.focus(); }
+  });
+  $('#bankToggle').onclick = () => { const b = $('#bank'); b.classList.toggle('hide'); $('#bankToggle').textContent = b.classList.contains('hide') ? 'Hiện gợi ý' : 'Ẩn gợi ý'; };
+  $('#check').onclick = once(() => {
+    const g = gradeBlanks(a.blanks, inputs.map(i => i.value));
+    inputs.forEach((inp, i) => {
+      inp.classList.add(g.kinds[i] === 'ok' ? 'right' : g.kinds[i] === 'near' ? 'near' : 'wrong');
+      inp.disabled = true;
+      if (g.kinds[i] !== 'ok') inp.insertAdjacentHTML('afterend', `<span class="fix">${esc(a.blanks[i].surface)}</span>`);
+    });
+    logPractice(g.rows);
+    $('#check').disabled = true;
+    $('#res').innerHTML = `<p class="verdict ${g.ok === a.blanks.length ? 'ok' : 'no'}">Đúng ${g.ok}/${a.blanks.length} chỗ trống.</p>
+      <div class="row"><button class="primary" id="again">Chọn bài khác</button></div>`;
+    $('#again').onclick = once(() => viewSources(a.lang));
+  });
+}
+
+/* ----- Tìm và sửa lỗi (AI viết câu dùng sai) ----- */
+const ERROR_SCHEMA = { type: 'OBJECT', properties: { items: { type: 'ARRAY', items: { type: 'OBJECT', properties: {
+  i: { type: 'INTEGER' }, wrong_sentence: { type: 'STRING' }, wrong_part: { type: 'STRING' }, right_part: { type: 'STRING' },
+  distractors: { type: 'ARRAY', items: { type: 'STRING' } }, explain_vi: { type: 'STRING' } },
+  required: ['i', 'wrong_sentence', 'wrong_part', 'right_part', 'distractors', 'explain_vi'] } } }, required: ['items'] };
+
+function errorPrompt(lang, items) {
+  const list = items.map((x, i) => `${i}. "${x.raw['Từ vựng']}" — nghĩa: ${meaningOf(x)}`).join('\n');
+  return `Bạn tạo bài tập "tìm và sửa lỗi" cho một người Việt đang học ${LANG_NAME[lang]}.
+Với MỖI từ dưới đây, viết MỘT câu ${LANG_NAME[lang]} ngắn (trình độ B1, đời thường) có dùng từ đó SAI theo đúng một kiểu lỗi người học hay mắc: sai cụm đi kèm hoặc giới từ, sai dạng từ, sai sắc thái hoặc ngữ cảnh, hoặc sai trật tự. Câu không được có lỗi nào khác.
+Danh sách (số đầu dòng là chỉ số i):
+${list}
+
+Trả JSON { items: [...] }, mỗi phần tử có:
+- i, wrong_sentence (câu có lỗi).
+- wrong_part: đoạn LIỀN MẠCH, chép NGUYÊN VĂN từ wrong_sentence, chứa chỗ sai (1–4 từ).
+- right_part: đoạn thay thế wrong_part để câu đúng và tự nhiên.
+- distractors: 3 đoạn thay thế khác trông hợp lý nhưng KHÔNG đúng trong câu này (không trùng right_part).
+- explain_vi: 1–2 câu tiếng Việt giải thích vì sao câu gốc sai.`;
+}
+function normalizeErrorItem(it, items) {
+  const x = items[+it.i] || (items.length === 1 ? items[0] : null);
+  if (!x) return null;
+  const ws = String(it.wrong_sentence || ''), wp = String(it.wrong_part || ''), rp = String(it.right_part || '');
+  if (!ws || !wp || !rp || !ws.includes(wp) || norm(wp) === norm(rp)) return null;
+  const dis = [...new Set((it.distractors || []).map(String).filter(s => s && norm(s) !== norm(rp) && norm(s) !== norm(wp)))].slice(0, 3);
+  if (dis.length < 2) return null;
+  return { x, ws, wp, rp, opts: shuffle([rp, ...dis]), explain: String(it.explain_vi || '') };
+}
+async function startError(lang) {
+  const items = pickPractice(lang, 5, x => !!meaningOf(x));
+  if (items.length < 3) { toast('Cần ít nhất 3 từ đã học.'); return; }
+  endAct();
+  act = { key: 'error', token: {}, lang, items, i: 0, ok: 0, cur: null, ctrl: new AbortController() };
+  return nextError();
+}
+// Mỗi câu chỉ được yêu cầu từ AI khi tới lượt làm. Thoát giữa chừng thì không tốn thêm request nào.
+async function nextError() {
+  const a = act;
+  if (!a || a.key !== 'error') return;
+  if (a.i >= a.items.length) { actSummary('Tìm và sửa lỗi', `Đúng ${a.ok}/${a.items.length} câu`, [], () => startError(a.lang)); return; }
+  const x = a.items[a.i];
+  actLoading('Tìm và sửa lỗi', `AI đang viết câu cho “${x.raw['Từ vựng']}”…`);
+  try {
+    const { data } = await callGemini({ feature: 'error', wordId: x.raw.word_id, prompt: errorPrompt(a.lang, [x]), schema: ERROR_SCHEMA, signal: a.ctrl.signal });
+    if (act !== a) return;
+    const q = normalizeErrorItem((data.items || [])[0] || {}, [x]);
+    if (!q) throw new Error('AI trả về câu không hợp lệ.');
+    a.cur = q;
+    drawError();
+  } catch (e) {
+    if (e.aborted || act !== a) return;
+    actError('Tìm và sửa lỗi', e.message, () => nextError(), () => { a.i++; nextError(); });
+  }
+}
+function drawError() {
+  const a = act, q = a.cur;
+  a.t0 = Date.now();
+  const html = esc(q.ws).replace(esc(q.wp), `<mark class="err">${esc(q.wp)}</mark>`);
+  render(actBar('Tìm và sửa lỗi') + `<div class="progress"><i style="width:${(a.i / a.items.length) * 100}%"></i></div>
+    <div class="card"><p class="muted">${a.i + 1}/${a.items.length} · từ cần ôn: <b>${esc(q.x.raw['Từ vựng'])}</b> (${esc(meaningOf(q.x))})</p>
+      <p class="context">${html}</p>
+      <p class="muted">Chỗ được tô màu đang dùng chưa đúng. Chọn cách sửa phù hợp nhất.</p>
+      <div>${q.opts.map((o, i) => `<button class="choice" data-v="${esc(o)}"><span class="k">${i + 1}</span>${esc(o)}</button>`).join('')}</div>
+      <div id="fb"></div></div>`);
+  wireBack();
+  app.querySelectorAll('.choice').forEach(b => b.onclick = once(() => answerError(b)));
+}
+function answerError(b) {
+  const a = act, q = a.cur, ok = b.dataset.v === q.rp, ms = Date.now() - a.t0;
+  app.querySelectorAll('.choice').forEach(x => { x.disabled = true; if (x.dataset.v === q.rp) x.classList.add('right'); });
+  if (!ok) b.classList.add('wrong');
+  if (ok) a.ok++;
+  logPractice([{ word_id: q.x.raw.word_id, exercise: 'error', rating: rateOf(ok, ms), ms }]);
+  $('#fb').innerHTML = `<p class="verdict ${ok ? 'ok' : 'no'}">${ok ? 'Đúng.' : 'Chưa đúng.'}</p>
+    <p class="context">${esc(q.ws.replace(q.wp, q.rp))}</p>${q.explain ? `<p class="muted">${esc(q.explain)}</p>` : ''}
+    <div class="row" style="margin-top:12px"><button class="primary" id="next">${a.i + 1 < a.items.length ? 'Câu tiếp theo' : 'Xem kết quả'}</button></div>`;
+  arm(500);
+  $('#next').onclick = once(() => { a.i++; nextError(); });
+}
+
+/* ----- Dịch ngược: câu tiếng Việt → ngôn ngữ đang học ----- */
+const TRANSLATE_SCHEMA = { type: 'OBJECT', properties: { score: { type: 'INTEGER' }, feedback_vi: { type: 'STRING' }, better: { type: 'STRING' } },
+  required: ['score', 'feedback_vi', 'better'] };
+function localTranslateScore(text, ref, word) {
+  const a = new Set(toksAny(text)), b = toksAny(ref);
+  if (!a.size || !b.length) return 1;
+  const overlap = b.filter(t => a.has(t)).length / b.length;
+  const usesWord = norm(text).includes(norm(word));
+  return !usesWord ? 1 : overlap >= 0.6 ? 3 : overlap >= 0.35 ? 2 : 1;
+}
+const toksAny = s => String(s || '').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+
+function startTranslate(lang) {
+  const items = pickPractice(lang, 5, x => examplePairs(DB.enrichment[x.raw.word_id] || {}).length > 0);
+  if (items.length < 2) { toast('Cần ít nhất 2 từ có câu ví dụ kèm bản dịch.'); return; }
+  endAct();
+  const qs = items.map(x => { const p = examplePairs(DB.enrichment[x.raw.word_id]); return { x, ...p[Math.floor(Math.random() * p.length)] }; });
+  act = { key: 'translate', token: {}, lang, qs, i: 0, sum: 0, ctrl: new AbortController() };
+  drawTranslate();
+}
+function drawTranslate() {
+  const a = act, q = a.qs[a.i];
+  render(actBar('Dịch ngược') + `<div class="progress"><i style="width:${(a.i / a.qs.length) * 100}%"></i></div>
+    <div class="card"><p class="muted">${a.i + 1}/${a.qs.length} · dịch sang ${LANG_NAME[a.lang]} và dùng từ <b>${esc(q.x.raw['Từ vựng'])}</b></p>
+      <p class="context">${esc(q.vi)}</p>
+      <textarea id="ans" autocapitalize="off"></textarea>
+      <p class="muted kbdhint" style="margin-top:6px">Enter để chấm · Shift + Enter xuống dòng</p>
+      <div class="row" style="margin-top:12px"><button class="primary" id="ok">Chấm</button></div>
+      <div id="fb"></div></div>`);
+  wireBack();
+  $('#ans').focus();
+  $('#ans').onkeydown = e => { if (enterOK(e) && !e.shiftKey) { e.preventDefault(); $('#ok').click(); } };
+  a.t0 = Date.now();
+  $('#ok').onclick = once(async () => {
+    const text = $('#ans').value.trim();
+    if (!text) return;
+    $('#ok').disabled = true; $('#ok').textContent = 'Đang chấm…';
+    const token = a.token;
+    let fb;
+    try {
+      const { data } = await callGemini({ feature: 'translate', wordId: q.x.raw.word_id, schema: TRANSLATE_SCHEMA, signal: a.ctrl.signal, prompt:
+        `Một người Việt dịch câu sang ${LANG_NAME[a.lang]}.
+Câu tiếng Việt: "${q.vi}"
+Bản dịch mẫu (chỉ để tham khảo, không bắt buộc giống từng chữ): "${q.en}"
+Từ cần dùng: "${q.x.raw['Từ vựng']}"
+Bản dịch của người học: "${text}"
+Chấm score 0–3: 3 = đúng nghĩa, đúng ngữ pháp, tự nhiên và dùng đúng từ cần học; 2 = đúng ý nhưng có lỗi nhỏ hoặc chưa tự nhiên; 1 = hiểu sai một phần hoặc không dùng từ cần học; 0 = sai hẳn.
+Trả JSON: score, feedback_vi (1–2 câu ngắn, hữu ích), better (một câu hoàn chỉnh, tự nhiên nhất, có dùng từ cần học).` });
+      fb = { score: clamp(+data.score || 0, 0, 3), feedback: data.feedback_vi, better: data.better };
+    } catch (e) {
+      if (e && e.aborted) return;
+      const s = localTranslateScore(text, q.en, q.x.raw['Từ vựng']);
+      fb = { score: s, feedback: 'Không gọi được AI, app chấm tạm bằng cách so khớp với bản mẫu.', better: q.en };
+    }
+    if (!act || act.token !== token) return;
+    const ms = Date.now() - a.t0;
+    a.sum += fb.score;
+    logPractice([{ word_id: q.x.raw.word_id, exercise: 'translate', rating: [1, 2, 3, 4][fb.score], ms }]);
+    $('#fb').innerHTML = `<p class="verdict ${fb.score >= 2 ? 'ok' : 'no'}">${esc(fb.feedback || '')}</p>
+      <p class="context">${esc(fb.better || q.en)}</p>
+      <div class="row" style="margin-top:12px"><button class="primary" id="next">${a.i + 1 < a.qs.length ? 'Tiếp tục' : 'Xem kết quả'}</button></div>`;
+    arm(500);
+    $('#next').onclick = once(() => {
+      a.i++;
+      if (a.i < a.qs.length) drawTranslate();
+      else actSummary('Dịch ngược', `Điểm ${a.sum}/${a.qs.length * 3}`, [], () => startTranslate(a.lang));
+    });
+  });
+}
+
+/* ----- Nhật ký 3 câu ----- */
+const DIARY_SCHEMA = { type: 'OBJECT', properties: { items: { type: 'ARRAY', items: { type: 'OBJECT', properties: {
+  i: { type: 'INTEGER' }, score: { type: 'INTEGER' }, feedback_vi: { type: 'STRING' }, corrected: { type: 'STRING' } },
+  required: ['i', 'score', 'feedback_vi', 'corrected'] } } }, required: ['items'] };
+function startDiary(lang) {
+  const items = pickPractice(lang, 3, x => !!meaningOf(x));
+  if (items.length < 2) { toast('Cần ít nhất 2 từ đã học.'); return; }
+  endAct();
+  act = { key: 'diary', token: {}, lang, items, ctrl: new AbortController() };
+  render(actBar('Nhật ký 3 câu') + `<div class="card"><p class="muted">Với mỗi từ, viết một câu về chính cuộc sống của bạn hôm nay hoặc tuần này. Câu gắn với bản thân sẽ dễ nhớ hơn.</p>
+    ${items.map((x, i) => `<label for="d${i}">${esc(x.raw['Từ vựng'])} · ${esc(meaningOf(x))}</label><textarea id="d${i}" data-i="${i}" autocapitalize="off" style="min-height:64px"></textarea>`).join('')}
+    <div class="row" style="margin-top:14px"><button class="primary" id="ok">Chấm 3 câu</button></div><div id="fb"></div></div>`);
+  wireBack();
+  $('#ok').onclick = once(async () => {
+    const texts = items.map((_, i) => ($(`#d${i}`).value || '').trim());
+    if (!texts.some(Boolean)) { toast('Hãy viết ít nhất một câu.'); return; }
+    $('#ok').disabled = true; $('#ok').textContent = 'Đang chấm…';
+    const token = act.token, t0 = Date.now();
+    try {
+      const list = items.map((x, i) => texts[i] ? `${i}. từ "${x.raw['Từ vựng']}" (nghĩa: ${meaningOf(x)}) — câu của người học: "${texts[i]}"` : null).filter(Boolean).join('\n');
+      const { data } = await callGemini({ feature: 'diary', schema: DIARY_SCHEMA, signal: act.ctrl.signal, prompt:
+        `Người Việt đang học ${LANG_NAME[lang]} viết câu về cuộc sống của mình, mỗi câu dùng một từ cần ôn.
+${list}
+Với từng câu (theo chỉ số i): score 0–3 (3 = đúng nghĩa của từ, đúng ngữ pháp, tự nhiên), feedback_vi (1–2 câu ngắn, thẳng thắn, hữu ích), corrected (câu đã sửa cho tự nhiên; nếu đã tốt thì giữ nguyên).` });
+      if (!act || act.token !== token) return;
+      const res = (data.items || []).filter(r => items[+r.i] && texts[+r.i]);
+      logPractice(res.map(r => ({ word_id: items[+r.i].raw.word_id, exercise: 'diary', rating: [1, 2, 3, 4][clamp(+r.score || 0, 0, 3)], ms: Math.round((Date.now() - t0) / res.length) })));
+      $('#fb').innerHTML = res.map(r => `<p class="verdict ${r.score >= 2 ? 'ok' : 'no'}"><b>${esc(items[+r.i].raw['Từ vựng'])}:</b> ${esc(r.feedback_vi)}</p><p class="context">${esc(r.corrected)}</p>`).join('')
+        + `<div class="row" style="margin-top:12px"><button class="primary" id="again">Viết lại với từ khác</button></div>`;
+      $('#again').onclick = once(() => startDiary(lang));
+    } catch (e) {
+      if (e.aborted || !act || act.token !== token) return;
+      $('#ok').disabled = false; $('#ok').textContent = 'Chấm 3 câu';
+      toast('Không chấm được: ' + e.message, 3500);
+    }
+  });
+}
+
+/* ----- Hán Việt (tiếng Hàn) ----- */
+function startHanviet(lang) {
+  const pool = hanvietPool();
+  const all = [...new Set(Object.values(DB.enrichment).filter(e => e.lang === 'ko' && e.hanviet).map(e => String(e.hanviet).trim()))];
+  if (pool.length < 3 || all.length < 3) { toast('Cần ít nhất 3 từ tiếng Hàn gốc Hán đã học.'); return; }
+  endAct();
+  const items = shuffle(pool.slice(0, 16)).slice(0, 8);
+  const qs = items.map(x => {
+    const right = hanvietOf(x);
+    return { x, right, opts: shuffle([right, ...shuffle(all.filter(v => v !== right)).slice(0, 3)]) };
+  });
+  act = { key: 'hanviet', token: {}, lang, qs, i: 0, ok: 0 };
+  drawHanviet();
+}
+function drawHanviet() {
+  const a = act, q = a.qs[a.i];
+  a.t0 = Date.now();
+  const e = DB.enrichment[q.x.raw.word_id] || {};
+  render(actBar('Hán Việt') + `<div class="progress"><i style="width:${(a.i / a.qs.length) * 100}%"></i></div>
+    <div class="card"><p class="muted">${a.i + 1}/${a.qs.length}</p>
+      <div class="word">${esc(q.x.raw['Từ vựng'])}</div>
+      ${e.romanization ? `<p class="muted">${esc(e.romanization)}</p>` : ''}
+      <p class="muted">Âm Hán Việt của từ này là gì?</p>
+      <div>${q.opts.map((o, i) => `<button class="choice" data-v="${esc(o)}"><span class="k">${i + 1}</span>${esc(o)}</button>`).join('')}</div>
+      <div id="fb"></div></div>`);
+  wireBack();
+  app.querySelectorAll('.choice').forEach(b => b.onclick = once(() => {
+    const ok = b.dataset.v === q.right, ms = Date.now() - a.t0;
+    app.querySelectorAll('.choice').forEach(x => { x.disabled = true; if (x.dataset.v === q.right) x.classList.add('right'); });
+    if (!ok) b.classList.add('wrong'); else a.ok++;
+    logPractice([{ word_id: q.x.raw.word_id, exercise: 'hanviet', rating: rateOf(ok, ms), ms }]);
+    speak(q.x.raw['Từ vựng'], 'ko');
+    $('#fb').innerHTML = `<p class="verdict ${ok ? 'ok' : 'no'}">${ok ? 'Đúng.' : 'Chưa đúng.'} <b>${esc(q.x.raw['Từ vựng'])}</b> = ${esc(q.right)} · ${esc(meaningOf(q.x))}</p>
+      <div class="row" style="margin-top:12px"><button class="primary" id="next">${a.i + 1 < a.qs.length ? 'Tiếp tục' : 'Xem kết quả'}</button></div>`;
+    arm(500);
+    $('#next').onclick = once(() => {
+      a.i++;
+      if (a.i < a.qs.length) drawHanviet();
+      else actSummary('Hán Việt', `Đúng ${a.ok}/${a.qs.length} từ`, [], () => startHanviet(a.lang));
+    });
+  }));
 }
 
 /* ============================ TỰ CẬP NHẬT ============================ */

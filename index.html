@@ -202,6 +202,36 @@ button.tw:focus-visible{outline:2px solid #007aff;outline-offset:1px}
 .gloss b{font-weight:800;color:var(--ink)}
 .q{margin:16px 0 4px;font-weight:700}
 
+/* --- màn hình đáp án: ví dụ và phần "Tìm hiểu thêm" --- */
+.exs{margin-top:14px;display:flex;flex-direction:column;gap:10px}
+.ex{padding-left:12px;border-left:3px solid rgba(10,132,255,.3)}
+.ex-en{font-size:14.5px;font-weight:500;line-height:1.55;color:var(--ink)}
+.ex-en b{font-weight:800}
+.ex-vi{margin-top:2px;font-size:13px;line-height:1.5;color:rgba(28,28,46,.55)}
+details.more{margin-top:16px;border-radius:16px;background:rgba(255,255,255,.38);border:1px solid rgba(255,255,255,.75)}
+details.more>summary{list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:space-between;
+  padding:11px 14px;font-size:12px;font-weight:600;color:rgba(28,28,46,.55);border-radius:16px}
+details.more>summary::-webkit-details-marker{display:none}
+details.more>summary::after{content:'▾';font-size:11px}
+details.more[open]>summary::after{content:'▴'}
+details.more>summary:focus-visible{outline:2px solid #007aff;outline-offset:2px}
+.more .sec{padding:12px 14px;border-top:1px solid rgba(255,255,255,.8)}
+.sec-t{font-size:12px;font-weight:700;color:rgba(28,28,46,.5);margin-bottom:6px}
+.use p{margin:0 0 6px;font-size:13.5px;line-height:1.65;font-weight:500;color:rgba(28,28,46,.68)}
+.use p:first-child{color:var(--ink)}
+.use p:last-child{margin-bottom:0}
+.syn{display:grid;grid-template-columns:max-content 1fr;gap:5px 12px;font-size:13.5px;line-height:1.5;align-items:baseline}
+.syn b{font-weight:700}
+.syn span{color:rgba(28,28,46,.58)}
+.fam{display:flex;flex-wrap:wrap;gap:6px}
+.fam .pill i{font-style:normal;font-weight:500;color:rgba(28,28,46,.45);margin-left:4px}
+.mn{margin:0;padding:10px 12px;border-radius:12px;font-size:13.5px;line-height:1.6;font-weight:500;color:rgba(28,28,46,.8);
+  background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.22)}
+.meta{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px;font-size:11.5px;font-weight:500;color:rgba(28,28,46,.45)}
+.meta button.ghost{padding:4px 10px;font-size:12px}
+.src{margin:8px 0 0;font-size:12px;color:rgba(28,28,46,.5);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.src a{font-weight:500;font-size:12px}
+
 /* --- luyện thêm --- */
 .acts{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
 button.act{display:flex;flex-direction:column;align-items:flex-start;gap:4px;text-align:left;padding:14px;border-radius:18px}
@@ -276,7 +306,7 @@ mark.err{background:rgba(244,63,94,.2);color:#881337;border-radius:5px;padding:0
 <div id="app"></div>
 <script>
 /* ============================ CẤU HÌNH & TIỆN ÍCH ============================ */
-const APP_VERSION = '2026.10.05-8';   // tăng mỗi lần cập nhật để app tự nhận bản mới
+const APP_VERSION = '2026.10.05-12';   // tăng mỗi lần cập nhật để app tự nhận bản mới
 const LS = {
   cfg: 'vocab.cfg', queue: 'vocab.queue', stats: 'vocab.dailyStats'
 };
@@ -339,10 +369,15 @@ function stabilityForget(D, S, R) {
 }
 
 // Trả về card mới sau khi chấm. g: 1 Again, 2 Hard, 3 Good, 4 Easy.
+// Các bước học ngắn (phút), ví dụ '1m,10m' → [1, 10]
+function learningSteps() {
+  const s = String(DB.settings.learning_steps || '1m,10m').split(',')
+    .map(x => parseFloat(x) * (x.includes('h') ? 60 : 1)).filter(x => x > 0);
+  return s.length ? s : [1, 10];
+}
 function schedule(card, g) {
   const r = Number(DB.settings.target_retention) || 0.9;
-  const steps = String(DB.settings.learning_steps || '1m,10m').split(',')
-    .map(s => parseFloat(s) * (s.includes('h') ? 60 : 1));
+  const steps = learningSteps();
   const c = { ...card };
   const t = new Date();
   const minutes = m => new Date(t.getTime() + m * 60000).toISOString();
@@ -487,9 +522,19 @@ async function loadAll() {
   DB.review = d.review_stats || null;
   DB.progress = {}; DB.enrichment = {};
   const ST = { '0': 'new', '1': 'learning', '2': 'review', '3': 'relearning' };
-  (d.progress || []).forEach(p => DB.progress[p.word_id] = {
-    ...p, state: ST[p.state] || p.state, S: +p.stability || 0, D: +p.difficulty || 0, reps: +p.reps || 0,
-    lapses: +p.lapses || 0, stage: +p.stage || 0, step: 0
+  (d.progress || []).forEach(p => {
+    let state = ST[p.state] || p.state;
+    const gapMin = (Date.parse(p.due) - Date.parse(p.last_review)) / 60000;     // khoảng từ lần ôn cuối tới hạn kế tiếp
+    // Dữ liệu cũ từ app AI Studio: ghi "đang học" nhưng lịch cách nhiều giờ/ngày → thực chất là thẻ ôn tập.
+    if ((state === 'learning' || state === 'relearning') && gapMin >= 720) state = 'review';
+    // Bước học ngắn không được lưu riêng, nên suy ra từ khoảng chờ đã lưu: chờ ~1 phút = bước 1, chờ ~10 phút = bước 2.
+    // Nếu không suy ra, mỗi lần tải lại app thẻ lại quay về bước 1 và không bao giờ tốt nghiệp (kẹt trong số thẻ đến hạn).
+    let step = 0;
+    if (state === 'learning' || state === 'relearning') learningSteps().forEach((m, i) => { if (gapMin >= m * 0.7) step = i; });
+    DB.progress[p.word_id] = {
+      ...p, state, S: +p.stability || 0, D: +p.difficulty || 0, reps: +p.reps || 0,
+      lapses: +p.lapses || 0, stage: +p.stage || 0, step
+    };
   });
   (d.enrichment || []).forEach(e => DB.enrichment[e.word_id] = e);
 }
@@ -668,7 +713,7 @@ const COMMON_RULES = `- examples: mỗi câu viết dạng "câu ${'${lang}'} (b
 - cloze_sentence: MỘT câu ngắn, rõ nghĩa, chứa NGUYÊN VĂN từ/cụm cần học (đúng chính tả như mục từ, không chia khác đi) để có thể che từ đó làm bài điền chỗ trống.
 - usage_note: 2–4 câu tiếng Việt giải thích sâu: sắc thái, khi nào dùng / không dùng, văn phong (trang trọng hay đời thường), lỗi người Việt hay mắc.
 - synonyms: 2–4 từ gần nghĩa, mỗi mục kèm khác biệt ngắn gọn, ví dụ "amusing (nhẹ hơn hilarious)".
-- word_family: các dạng từ cùng gốc nếu có, ví dụ "enthusiasm (n), enthusiastic (adj)"; không có thì để trống.`;
+- word_family: các dạng cùng gốc, mỗi dạng viết đúng kiểu 'dạng (n)', 'dạng (v)', 'dạng (adj)' hoặc 'dạng (adv)', cách nhau bằng dấu phẩy, BAO GỒM cả chính từ đang học, mỗi loại từ chỉ một dạng phổ biến nhất. Ví dụ "enthusiasm (n), enthusiastic (adj), enthusiastically (adv)". Nếu không có họ từ rõ ràng thì để trống.`;
 
 function enrichPrompt(raw, langName) {
   return `Bạn giúp một người Việt học ${langName}.
@@ -936,6 +981,7 @@ function viewHome() {
     const cards = rows.map(cardOf).filter(c => c.suspended !== 'true');
     return {
       due: cards.filter(c => c.state !== 'new' && new Date(c.due) <= t).length,
+      learn: cards.filter(c => (c.state === 'learning' || c.state === 'relearning') && new Date(c.due) <= t).length,
       fresh: cards.filter(c => c.state === 'new').length,
       total: cards.length
     };
@@ -949,7 +995,7 @@ function viewHome() {
       <button class="deck" data-lang="${d.l}">
         <span>
           <h2>${d.name}</h2>
-          <span class="muted">${d.due} thẻ đến hạn · ${d.fresh} từ chưa học · ${d.total} từ đã lưu</span>
+          <span class="muted">${d.due} thẻ đến hạn${d.learn ? ` (${d.learn} đang ở bước học ngắn)` : ''} · ${d.fresh} từ chưa học · ${d.total} từ đã lưu</span>
         </span>
         <span class="num ${d.due + Math.min(d.fresh, +DB.settings['daily_new_' + d.l] || 0) ? '' : 'zero'}">${d.due}</span>
       </button>`).join('') || '<div class="card">Chưa có từ nào trong sheet. Lưu vài từ rồi quay lại.</div>'}
@@ -1238,12 +1284,45 @@ function parseFamily(s) {
     return m ? { form: m[1].trim(), pos: m[2].toLowerCase() } : null;
   }).filter(Boolean);
 }
-function familyTarget(item, d) {
-  if (/\s/.test(d.word)) return null;                      // chỉ áp dụng cho từ đơn
-  const fam = parseFamily(d.e.word_family).filter(f => norm(f.form) !== norm(d.word) && !/\s/.test(f.form));
-  if (!fam.length) return null;
-  const t = fam[(item.card.reps || 0) % fam.length];
-  return { ...t, accepted: fam.filter(f => f.pos === t.pos).map(f => f.form) };
+// Loại từ của từ đang học, đọc từ chữ tiếng Việt AI ghi ở cột pos ("danh từ", "phó từ"...).
+function posOf(s) {
+  s = stripVi(s);
+  if (/danh tu|noun/.test(s)) return 'n';
+  if (/dong tu|verb/.test(s)) return 'v';
+  if (/tinh tu|adjective/.test(s)) return 'adj';
+  if (/pho tu|trang tu|adverb/.test(s)) return 'adv';
+  return null;
+}
+const sharedPrefix = (a, b) => { a = norm(a); b = norm(b); let i = 0; while (i < a.length && i < b.length && a[i] === b[i]) i++; return i; };
+
+// Câu hỏi "đổi dạng từ" dạng chọn: hỏi một loại từ khác với từ đang học, các lựa chọn là những từ cùng họ do AI cung cấp.
+// Chỉ hỏi loại từ mà họ từ có đúng MỘT dạng, để luôn chỉ có một đáp án đúng.
+function familyQuestion(item, d) {
+  if (/\s/.test(d.word)) return null;                                   // chỉ áp dụng cho từ đơn
+  const uniq = [...new Map(parseFamily(d.e.word_family).filter(f => !/\s/.test(f.form)).map(f => [norm(f.form), f])).values()];
+  const own = uniq.find(f => norm(f.form) === norm(d.word));
+  const ownPos = own ? own.pos : posOf(d.e.pos);
+  if (!ownPos) return null;                                             // không biết loại từ của từ đang học thì câu hỏi sẽ mơ hồ
+  const others = uniq.filter(f => norm(f.form) !== norm(d.word));
+  const count = {};
+  others.forEach(f => { count[f.pos] = (count[f.pos] || 0) + 1; });
+  const cands = others.filter(f => f.pos !== ownPos && count[f.pos] === 1);
+  if (!cands.length) return null;                                       // ví dụ chỉ có "ensemble (n)" cho "Ensembles (n)": cùng loại từ, không đáng hỏi
+  const t = cands[(item.card.reps || 0) % cands.length];
+  const wrong = others.filter(f => f !== t).map(f => f.form).slice(0, 3);
+  // Thiếu thì bù bằng từ của họ từ khác (loại bỏ từ có chung gốc với từ đang học để không thành đáp án đúng thứ hai)
+  const strange = [];
+  Object.values(DB.enrichment).forEach(e2 => parseFamily(e2.word_family).forEach(f => {
+    if (/\s/.test(f.form) || strange.some(s => norm(s.form) === norm(f.form))) return;
+    if (sharedPrefix(f.form, d.word) >= 4 || sharedPrefix(f.form, t.form) >= 4) return;
+    if (uniq.some(u => norm(u.form) === norm(f.form))) return;
+    strange.push(f);
+  }));
+  strange.sort((a, b) => (b.pos === t.pos) - (a.pos === t.pos));
+  const options = [t.form, ...wrong];
+  for (const s of strange) { if (options.length >= 4) break; options.push(s.form); }
+  if (options.length < 3) return null;
+  return { t, ownPos, options: shuffle(options), family: own ? uniq : [{ form: d.word, pos: ownPos }, ...uniq] };
 }
 
 function availableExercises(item, d) {
@@ -1257,7 +1336,7 @@ function availableExercises(item, d) {
     dictation: hasW && typeof window !== 'undefined' && 'speechSynthesis' in window,
     recall: true,
     defguess: def.length > 8,
-    family: !!familyTarget(item, d),
+    family: !!familyQuestion(item, d),
     write: true
   };
 }
@@ -1299,7 +1378,7 @@ function typedEx({ item, d, head, started, finish }, { hint, label = 'Gõ từ',
   }
 }
 
-function choiceEx({ item, d, head, started, finish }, { hint, options, answer }) {
+function choiceEx({ item, d, head, started, finish }, { hint, options, answer, after = '' }) {
   render(head + `
     <div class="card">
       ${hint}
@@ -1310,7 +1389,7 @@ function choiceEx({ item, d, head, started, finish }, { hint, options, answer })
     const ok = b.dataset.v === answer;
     b.classList.add(ok ? 'right' : 'wrong');
     const m = { mode: 'choice', exact: ok, errorRatio: ok ? 0 : 1, ms: Date.now() - started };
-    finish(autoRating(m), '', m);
+    finish(autoRating(m), after, m);
   }));
 }
 
@@ -1398,15 +1477,17 @@ const EX = {
     });
   },
 
-  // Đổi dạng từ trong cùng họ từ
+  // Đổi dạng từ: chọn đúng dạng (loại từ) cùng gốc trong các từ AI đã cung cấp
   family(c) {
     const { item, d } = c;
-    const t = familyTarget(item, d);
-    typedEx(c, {
-      hint: `<p class="muted">Từ đang học</p><div class="word" style="font-size:1.5rem">${esc(d.word)}</div>
-        <p class="muted">${esc(d.meaning)}</p>
-        <p class="context">Gõ dạng <b>${POSVI[t.pos]}</b> cùng họ từ.</p>`,
-      label: 'Dạng ' + POSVI[t.pos], accepted: t.accepted
+    const q = familyQuestion(item, d);
+    choiceEx(c, {
+      hint: `<p class="muted">Cùng một gốc, khác loại từ</p>
+        <div class="word" style="font-size:1.5rem">${esc(d.word)}</div>
+        <p class="muted">${POSVI[q.ownPos]} · ${esc(d.meaning)}</p>
+        <p class="context">Từ nào dưới đây là <b>${POSVI[q.t.pos]}</b> cùng gốc với “${esc(d.word)}”?</p>`,
+      options: q.options, answer: q.t.form,
+      after: `<p class="muted"><b>Họ từ:</b> ${q.family.map(f => `${esc(f.form)} (${POSVI[f.pos]})`).join(' · ')}</p>`
     });
   },
 
@@ -1451,10 +1532,54 @@ function showCard(item) {
   $('#quit').onclick = once(() => { flush(true); viewHome(); });
 }
 
+// Tách câu / tách phần chú thích để trình bày thành từng dòng ngắn, dễ quét mắt.
+const sentencesOf = t => String(t || '').trim().split(/(?<=[.!?。])\s+/).filter(Boolean);
+function splitNote(s) {
+  const m = String(s).match(/^(.*?)\s*[(（]([^()（）]*)[)）]\s*$/);
+  return m && m[1] ? { head: m[1].trim(), note: m[2].trim() } : { head: String(s).trim(), note: '' };
+}
+function splitExample(s) {
+  const m = String(s).match(/^(.*\S)\s*\(([^()]+)\)\s*$/);
+  return m && /[ăâđêôơưáàảãạéèẻẽẹíìỉĩịóòỏõọúùủũụýỳỷỹỵ]/i.test(m[2]) ? { en: m[1].trim(), vi: m[2].trim() } : { en: String(s).trim(), vi: '' };
+}
+// Tô đậm từ đang học trong câu ví dụ; nếu từ được chia khác dạng (ensemble / Ensembles) thì tô theo phần gốc.
+function hl(text, word) {
+  const plain = esc(text), exact = highlight(text, word);
+  if (exact !== plain) return exact;
+  const stem = String(word).replace(/(ing|ed|es|s|ly)$/i, '');
+  if (stem.length >= 4) {
+    try { return plain.replace(new RegExp('\\b(' + esc(stem).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\w*)', 'gi'), '<b>$1</b>'); } catch { /* bỏ qua */ }
+  }
+  return plain;
+}
+function examplesHTML(exs, word) {
+  if (!exs.length) return '';
+  return `<div class="exs">${exs.map(s => {
+    const x = splitExample(s);
+    return `<div class="ex"><div class="ex-en">${hl(x.en, word)}</div>${x.vi ? `<div class="ex-vi">${esc(x.vi)}</div>` : ''}</div>`;
+  }).join('')}</div>`;
+}
+// Phần "Tìm hiểu thêm": mỗi mục một khối riêng, tiêu đề nhỏ, bỏ được bằng cách thu gọn (app nhớ lựa chọn).
+function moreInfoHTML(e) {
+  const use = sentencesOf(e.usage_note).slice(0, 4);
+  const syns = listOf(e.synonyms).map(splitNote).filter(s => s.head);
+  const fam = parseFamily(e.word_family);
+  const famRaw = !fam.length ? String(e.word_family || '').trim() : '';
+  const secs = [];
+  if (use.length) secs.push(`<div class="sec"><div class="sec-t">Giải thích thêm</div><div class="use">${use.map(p => `<p>${esc(p)}</p>`).join('')}</div></div>`);
+  if (syns.length) secs.push(`<div class="sec"><div class="sec-t">Gần nghĩa</div><div class="syn">${syns.map(s => `<b>${esc(s.head)}</b><span>${esc(s.note)}</span>`).join('')}</div></div>`);
+  if (fam.length || famRaw) secs.push(`<div class="sec"><div class="sec-t">Họ từ</div><div class="fam">${
+    fam.length ? fam.map(f => `<span class="pill">${esc(f.form)}<i>${POSVI[f.pos]}</i></span>`).join('') : `<span class="muted">${esc(famRaw)}</span>`}</div></div>`);
+  if (e.mnemonic) secs.push(`<div class="sec"><div class="sec-t">Mẹo nhớ</div><p class="mn">${esc(e.mnemonic)}</p></div>`);
+  if (!secs.length) return '';
+  const open = localStorage.getItem('vocab.moreOpen') !== '0';
+  return `<details class="more"${open ? ' open' : ''}><summary>Tìm hiểu thêm</summary>${secs.join('')}</details>`;
+}
+
 function reveal(item, d, rating, extra, metrics) {
   item._ms = metrics ? Math.round(metrics.ms) : '';
   const token = item._token;
-  const e = d.e, colls = listOf(e.collocations), exs = listOf(e.examples), syns = listOf(e.synonyms);
+  const e = d.e, colls = listOf(e.collocations), exs = listOf(e.examples);
   const differs = e.meaning_fixed && d.raw['Nghĩa tiếng Việt'] &&
     norm(e.meaning_fixed) !== norm(d.raw['Nghĩa tiếng Việt']);
   render(`
@@ -1468,13 +1593,10 @@ function reveal(item, d, rating, extra, metrics) {
       ${extra}
       ${d.raw['Câu / Ngữ cảnh'] ? `<p class="context">${highlight(d.raw['Câu / Ngữ cảnh'], d.word)}</p>` : ''}
       ${colls.length ? `<div class="pills">${colls.map(c => `<span class="pill">${esc(c)}</span>`).join('')}</div>` : ''}
-      ${exs.length ? `<p class="muted" style="margin-top:12px">${exs.map(esc).join('<br>')}</p>` : ''}
-      ${e.usage_note ? `<p class="muted" style="margin-top:12px"><b>Giải thích thêm:</b> ${esc(e.usage_note)}</p>` : ''}
-      ${syns.length ? `<p class="muted"><b>Gần nghĩa:</b> ${syns.map(esc).join(' · ')}</p>` : ''}
-      ${e.word_family ? `<p class="muted"><b>Họ từ:</b> ${esc(e.word_family)}</p>` : ''}
-      ${e.mnemonic ? `<p class="muted">Mẹo nhớ: ${esc(e.mnemonic)}</p>` : ''}
-      ${cfg.geminiKey ? `<p class="muted">${e.refreshed_at ? `AI làm mới lần gần nhất: ${new Date(e.refreshed_at).toLocaleDateString('vi-VN')}${+e.refresh_count ? ` (lần ${e.refresh_count})` : ''} · ` : ''}<button class="ghost" id="refreshNow" style="padding:2px 6px">✨ Làm mới bằng AI</button></p>` : ''}
-      ${d.raw['Nguồn (URL)'] ? `<p class="muted"><a href="${esc(d.raw['Nguồn (URL)'])}" target="_blank" rel="noopener">${esc(d.raw['Tiêu đề trang'] || 'Nguồn')}</a></p>` : ''}
+      ${examplesHTML(exs, d.word)}
+      ${moreInfoHTML(e)}
+      ${cfg.geminiKey ? `<div class="meta"><span>${e.refreshed_at ? `AI làm mới ${new Date(e.refreshed_at).toLocaleDateString('vi-VN')}${+e.refresh_count ? ` · lần ${e.refresh_count}` : ''}` : 'Chưa làm mới'}</span><button class="ghost" id="refreshNow">✨ Làm mới</button></div>` : ''}
+      ${d.raw['Nguồn (URL)'] ? `<p class="src">Nguồn: <a href="${esc(d.raw['Nguồn (URL)'])}" target="_blank" rel="noopener">${esc(d.raw['Tiêu đề trang'] || d.raw['Nguồn (URL)'])}</a></p>` : ''}
       <div class="auto">
         <span>
           <span class="label">App chấm</span>
@@ -1496,9 +1618,11 @@ function reveal(item, d, rating, extra, metrics) {
   const rn = $('#refreshNow');
   if (rn) rn.onclick = async () => {
     rn.disabled = true; rn.textContent = 'Đang làm mới…';
-    try { await refreshEnrichment(d.raw); rn.textContent = 'Đã làm mới, lần gặp sau sẽ thấy nội dung mới'; flush(true); }
-    catch (err) { rn.disabled = false; rn.textContent = '✨ Làm mới bằng AI'; toast('Không làm mới được: ' + err.message, 3500); }
+    try { await refreshEnrichment(d.raw); rn.textContent = 'Đã làm mới, lần gặp sau sẽ thấy'; flush(true); }
+    catch (err) { rn.disabled = false; rn.textContent = '✨ Làm mới'; toast('Không làm mới được: ' + err.message, 3500); }
   };
+  const det = $('details.more');
+  if (det) det.ontoggle = () => localStorage.setItem('vocab.moreOpen', det.open ? '1' : '0');
   if (DB.settings.autoplay !== 'false') speak(d.word, d.lang);
   app.querySelectorAll('.rate button').forEach(b => b.onclick = once(() => commit(item, d, +b.dataset.g, token)));
 }

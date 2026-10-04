@@ -1,0 +1,881 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Từ vựng — học theo lịch nhớ</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Từ vựng">
+<meta name="theme-color" content="#eef2ff">
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23eef2ff'/%3E%3Cstop offset='.6' stop-color='%23fdf2f8'/%3E%3Cstop offset='1' stop-color='%23eafff3'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='180' height='180' fill='url(%23g)'/%3E%3Ccircle cx='52' cy='56' r='34' fill='%236ea8fe' opacity='.55'/%3E%3Ccircle cx='132' cy='128' r='40' fill='%23a78bfa' opacity='.5'/%3E%3Ctext x='90' y='116' font-size='84' font-weight='700' text-anchor='middle' font-family='-apple-system,SF Pro Display,sans-serif' fill='%231c1c2e'%3ET%3C/text%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23eef2ff'/%3E%3Cstop offset='.6' stop-color='%23fdf2f8'/%3E%3Cstop offset='1' stop-color='%23eafff3'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='180' height='180' fill='url(%23g)'/%3E%3Ccircle cx='52' cy='56' r='34' fill='%236ea8fe' opacity='.55'/%3E%3Ccircle cx='132' cy='128' r='40' fill='%23a78bfa' opacity='.5'/%3E%3Ctext x='90' y='116' font-size='84' font-weight='700' text-anchor='middle' font-family='-apple-system,SF Pro Display,sans-serif' fill='%231c1c2e'%3ET%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ink:#1c1c2e; --accent:#0a84ff; --accent-hi:#0071e3; --danger:#ff3b30;
+  --ok:#065f46; --ok-bg:rgba(16,185,129,.2); --ok-br:#6ee7b7;
+  --warn:#92400e; --warn-bg:rgba(245,158,11,.2); --warn-br:#fcd34d;
+  --bad:#881337; --bad-bg:rgba(244,63,94,.2); --bad-br:#fda4af;
+  --spring:cubic-bezier(.34,1.56,.64,1);
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+}
+*,*::before,*::after{box-sizing:inherit}
+html{height:100%}
+body{
+  margin:0;min-height:100%;color:var(--ink);background-color:#f2f2f7;
+  background-image:
+    radial-gradient(at 12% 18%, rgba(110,168,254,.55) 0, transparent 52%),
+    radial-gradient(at 88% 12%, rgba(251,123,162,.42) 0, transparent 48%),
+    radial-gradient(at 78% 82%, rgba(167,139,250,.48) 0, transparent 55%),
+    radial-gradient(at 15% 85%, rgba(52,211,153,.35) 0, transparent 52%),
+    linear-gradient(160deg,#eef2ff,#fdf2f8 60%,#eafff3);
+  background-attachment:fixed;
+  font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','SF Pro Display','Plus Jakarta Sans',system-ui,sans-serif;
+  font-size:16px;line-height:1.5;-webkit-text-size-adjust:100%;
+}
+#app{max-width:620px;margin:0 auto;padding:22px 16px 72px}
+h1,h2,h3{margin:0;font-weight:700;letter-spacing:-.01em;line-height:1.2}
+h1{font-size:1.4rem;text-transform:uppercase;letter-spacing:.03em}
+h2{font-size:1.15rem} h3{font-size:1rem;text-transform:uppercase;letter-spacing:.05em}
+p{margin:.5em 0}
+a{color:var(--accent);text-decoration:none;font-weight:600}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+
+/* --- bề mặt kính --- */
+.card{
+  position:relative;overflow:hidden;border-radius:24px;padding:20px;margin-bottom:14px;
+  background:linear-gradient(180deg,rgba(255,255,255,.34),rgba(255,255,255,.14));
+  -webkit-backdrop-filter:blur(22px) saturate(160%);backdrop-filter:blur(22px) saturate(160%);
+  border:1px solid rgba(255,255,255,.55);
+  box-shadow:0 14px 34px rgba(31,38,80,.16), inset 0 1px 0 rgba(255,255,255,.7);
+}
+.card::before{
+  content:'';position:absolute;inset:0;pointer-events:none;
+  background:linear-gradient(135deg,rgba(255,255,255,.55) 0%,rgba(255,255,255,0) 38%);
+  mix-blend-mode:overlay;
+}
+.card>*{position:relative}
+
+/* --- nút --- */
+button{
+  font:inherit;font-weight:600;cursor:pointer;color:var(--ink);
+  border-radius:9999px;padding:11px 18px;
+  background:rgba(255,255,255,.32);
+  -webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);
+  border:1px solid rgba(255,255,255,.55);
+  box-shadow:0 2px 6px rgba(0,0,0,.04);
+  transition:all .15s ease;
+}
+button:hover{background:rgba(255,255,255,.45);border-color:rgba(255,255,255,.7);transform:translateY(-1px)}
+button:active{transform:scale(.96)}
+button.primary{
+  color:#0a5bb8;border:1px solid rgba(10,132,255,.45);
+  background:linear-gradient(180deg,rgba(255,255,255,.75),rgba(10,132,255,.22));
+  -webkit-backdrop-filter:blur(22px) saturate(180%);backdrop-filter:blur(22px) saturate(180%);
+  box-shadow:0 8px 20px rgba(10,132,255,.22), inset 0 1px 0 rgba(255,255,255,.9);
+  transition:transform .15s var(--spring),filter .15s ease,background .15s ease;
+}
+button.primary:hover{background:linear-gradient(180deg,rgba(255,255,255,.85),rgba(10,132,255,.3));transform:translateY(-1px)}
+button.ghost{background:transparent;border-color:transparent;box-shadow:none;color:rgba(28,28,46,.5);padding:9px 12px}
+button.ghost:hover{background:rgba(255,255,255,.35);transform:none}
+button:disabled{opacity:.5;cursor:not-allowed;transform:none}
+button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid #007aff;outline-offset:2px}
+
+/* --- nhập liệu --- */
+label{
+  display:block;margin:16px 0 6px;font-size:11.5px;font-weight:600;
+  letter-spacing:.06em;text-transform:uppercase;color:rgba(28,28,46,.45);
+}
+input,textarea{
+  font:inherit;font-weight:500;width:100%;padding:12px 14px;color:var(--ink);
+  background:rgba(255,255,255,.32);
+  -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
+  border:1px solid rgba(255,255,255,.55);border-radius:12px;transition:all .2s ease;
+}
+input:focus,textarea:focus{
+  background:rgba(255,255,255,.45);border-color:rgba(10,132,255,.55);
+  box-shadow:0 0 0 3px rgba(10,132,255,.22);outline:none;
+}
+textarea{min-height:92px;resize:vertical}
+input::placeholder{color:rgba(28,28,46,.45)}
+
+.row{display:flex;gap:10px;flex-wrap:wrap}
+.row>*{flex:1 1 0;min-width:0}
+.bar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px}
+.muted{color:rgba(28,28,46,.5);font-size:12px;font-weight:500}
+
+/* --- bộ thẻ ở trang chủ --- */
+.deck{
+  display:flex;align-items:center;justify-content:space-between;gap:14px;width:100%;
+  text-align:left;padding:20px;margin-bottom:12px;border-radius:24px;
+  background:linear-gradient(180deg,rgba(255,255,255,.34),rgba(255,255,255,.14));
+  -webkit-backdrop-filter:blur(22px) saturate(160%);backdrop-filter:blur(22px) saturate(160%);
+  border:1px solid rgba(255,255,255,.55);
+  box-shadow:0 14px 34px rgba(31,38,80,.16), inset 0 1px 0 rgba(255,255,255,.7);
+  transition:all .32s var(--spring);
+}
+.deck:hover{transform:translateY(-2px);box-shadow:0 18px 40px rgba(31,38,80,.2)}
+.deck .num{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:2rem;font-weight:700;color:var(--accent)}
+.deck .num.zero{color:rgba(28,28,46,.25)}
+
+/* --- thẻ học --- */
+.word{font-size:2rem;font-weight:700;letter-spacing:-.02em;line-height:1.15;word-break:break-word}
+.meaning{font-size:1.35rem;font-weight:700;letter-spacing:-.01em}
+.context{
+  font-size:.95rem;font-weight:500;color:rgba(28,28,46,.8);line-height:1.6;margin:16px 0;
+  padding:14px 16px;border-radius:16px;
+  background:rgba(255,255,255,.4);border:1px solid rgba(255,255,255,.7);
+}
+.context b{font-weight:800;color:var(--ink);background:rgba(245,158,11,.25);border-radius:4px;padding:0 3px}
+.blank{color:var(--accent);font-weight:800;letter-spacing:.08em}
+.choice{
+  display:block;width:100%;text-align:left;margin-bottom:9px;border-radius:16px;
+  font-size:.95rem;font-weight:600;padding:14px 16px;
+}
+.choice.right{background:var(--ok-bg);border-color:var(--ok-br);color:var(--ok)}
+.choice.wrong{background:var(--bad-bg);border-color:var(--bad-br);color:var(--bad)}
+.verdict{font-weight:700;margin:14px 0 4px;font-size:.95rem}
+.verdict.ok{color:var(--ok)} .verdict.no{color:var(--bad)}
+
+/* --- đánh giá --- */
+.rate{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-top:8px}
+.rate button{padding:10px 2px;font-size:12px;font-weight:700;line-height:1.3;border-radius:9999px}
+.rate button b{display:block;font-size:10px;font-weight:500;color:rgba(28,28,46,.45)}
+.rate button.primary b{color:rgba(10,91,184,.6)}
+.auto{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;
+  margin-top:18px;padding:12px 14px;border-radius:16px;
+  background:rgba(255,255,255,.45);border:1px solid rgba(255,255,255,.8);
+}
+.auto .label{font-size:10.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:rgba(28,28,46,.45)}
+.auto .value{font-size:1rem;font-weight:800}
+
+.pills{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px}
+.pill{
+  font-size:11px;font-weight:700;border-radius:9999px;padding:4px 11px;
+  background:rgba(255,255,255,.85);border:1px solid rgba(255,255,255,.95);
+  box-shadow:0 2px 6px rgba(0,0,0,.03);color:rgba(28,28,46,.75);
+}
+.pill.warn{background:var(--warn-bg);border-color:var(--warn-br);color:var(--warn)}
+.pill.accent{background:rgba(10,132,255,.15);border-color:rgba(10,132,255,.3);color:var(--accent-hi)}
+.progress{
+  height:6px;border-radius:9999px;overflow:hidden;margin-bottom:16px;
+  background:rgba(255,255,255,.5);border:1px solid rgba(255,255,255,.8);
+}
+.progress i{display:block;height:100%;background:var(--accent);transition:width .3s var(--spring)}
+table{width:100%;border-collapse:collapse;font-size:13px;font-weight:500}
+td{padding:8px 0;border-bottom:1px solid rgba(255,255,255,.6)}
+td:first-child{color:rgba(28,28,46,.6)}
+td:last-child{text-align:right;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-weight:700}
+.toast{
+  position:fixed;left:50%;transform:translateX(-50%);
+  bottom:calc(20px + env(safe-area-inset-bottom,0px));z-index:9;max-width:90vw;
+  padding:11px 18px;border-radius:9999px;font-size:13px;font-weight:600;color:var(--ink);
+  background:rgba(255,255,255,.9);
+  -webkit-backdrop-filter:blur(28px) saturate(200%);backdrop-filter:blur(28px) saturate(200%);
+  border:1px solid rgba(255,255,255,.95);
+  box-shadow:0 12px 36px rgba(15,23,42,.18), inset 0 1.5px 1.5px rgba(255,255,255,1);
+}
+.hide{display:none}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+/* ============================ CẤU HÌNH & TIỆN ÍCH ============================ */
+const LS = {
+  cfg: 'vocab.cfg', queue: 'vocab.queue', stats: 'vocab.dailyStats'
+};
+const $ = (s, r = document) => r.querySelector(s);
+const app = $('#app');
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const nowISO = () => new Date().toISOString();
+const days = (a, b) => (new Date(a) - new Date(b)) / 864e5;
+const round = (n, d) => Math.round(n * 10 ** d) / 10 ** d;
+const clamp = (n, a, b) => Math.min(b, Math.max(a, n));
+
+const cfg = Object.assign({ apiUrl: '', token: '', geminiKey: '' },
+  JSON.parse(localStorage.getItem(LS.cfg) || '{}'));
+const saveCfg = () => localStorage.setItem(LS.cfg, JSON.stringify(cfg));
+
+let DB = { raw: [], progress: {}, enrichment: {}, settings: {}, usage: null };
+let session = null;
+
+/* Chống bấm trùng: sau mỗi lần vẽ màn hình mới, bỏ qua các cú bấm trong 450ms đầu
+   (nút mới vừa mọc ra ngay dưới ngón tay), và khóa lại khi đang xử lý một hành động. */
+let busy = false, guardUntil = 0;
+function arm(ms = 450) { guardUntil = Date.now() + ms; }
+function once(fn) {
+  return async (...args) => {
+    if (busy || Date.now() < guardUntil) return;
+    busy = true;
+    try { await fn(...args); } finally { busy = false; }
+  };
+}
+
+function toast(msg, ms = 2200) {
+  const t = document.createElement('div');
+  t.className = 'toast'; t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), ms);
+}
+
+/* ============================ FSRS 4.5 ============================ */
+// Mô hình DSR: D (độ khó 1-10), S (độ bền, ngày), R (khả năng nhớ lúc này).
+const W = [0.40255,1.18385,3.173,15.69105,7.1949,0.5345,1.4604,0.0046,1.54575,0.1192,
+           1.01925,1.9395,0.11,0.29605,2.2698,0.2315,2.9898,0.51655,0.6621];
+const F = 19 / 81, C = -0.5;
+
+const retrievability = (elapsedDays, S) => Math.pow(1 + F * Math.max(0, elapsedDays) / S, C);
+const intervalFor = (S, r) => (S / F) * (Math.pow(r, 1 / C) - 1);
+const initS = g => W[g - 1];
+const initD = g => clamp(W[4] - Math.exp(W[5] * (g - 1)) + 1, 1, 10);
+
+function nextD(D, g) {
+  const d = D - W[6] * (g - 3);
+  return clamp(W[7] * initD(4) + (1 - W[7]) * d, 1, 10);
+}
+function stabilityRecall(D, S, R, g) {
+  const hard = g === 2 ? W[15] : 1, easy = g === 4 ? W[16] : 1;
+  return S * (1 + Math.exp(W[8]) * (11 - D) * Math.pow(S, -W[9]) *
+    (Math.exp(W[10] * (1 - R)) - 1) * hard * easy);
+}
+function stabilityForget(D, S, R) {
+  return Math.min(S, W[11] * Math.pow(D, -W[12]) * (Math.pow(S + 1, W[13]) - 1) * Math.exp(W[14] * (1 - R)));
+}
+
+// Trả về card mới sau khi chấm. g: 1 Again, 2 Hard, 3 Good, 4 Easy.
+function schedule(card, g) {
+  const r = Number(DB.settings.target_retention) || 0.9;
+  const steps = String(DB.settings.learning_steps || '1m,10m').split(',')
+    .map(s => parseFloat(s) * (s.includes('h') ? 60 : 1));
+  const c = { ...card };
+  const t = new Date();
+  const minutes = m => new Date(t.getTime() + m * 60000).toISOString();
+  const after = d => new Date(t.getTime() + Math.max(1, Math.round(d)) * 864e5).toISOString();
+
+  if (c.state === 'new') {
+    c.S = initS(g); c.D = initD(g); c.reps = 1;
+    if (g === 1) { c.state = 'learning'; c.step = 0; c.due = minutes(steps[0]); }
+    else if (g === 2) { c.state = 'learning'; c.step = 0; c.due = minutes(steps[0]); }
+    else if (g === 3) { c.state = 'learning'; c.step = 1; c.due = minutes(steps[1] ?? 10); }
+    else { c.state = 'review'; c.due = after(intervalFor(c.S, r)); }
+  } else if (c.state === 'learning' || c.state === 'relearning') {
+    c.reps++;
+    if (g === 1) { c.step = 0; c.due = minutes(steps[0]); }
+    else if (g === 2) { c.due = minutes(steps[0]); }
+    else {
+      const last = c.step >= steps.length - 1 || g === 4;
+      if (last) { c.state = 'review'; c.due = after(intervalFor(c.S, r)); }
+      else { c.step++; c.due = minutes(steps[c.step]); }
+    }
+  } else { // review
+    const elapsed = c.last_review ? days(t, c.last_review) : 0;
+    const R = retrievability(elapsed, c.S);
+    c.reps++;
+    c.D = nextD(c.D, g);
+    if (g === 1) {
+      c.lapses++; c.S = stabilityForget(c.D, c.S, R);
+      c.state = 'relearning'; c.step = 0; c.due = minutes(steps[0]);
+    } else {
+      c.S = stabilityRecall(c.D, c.S, R, g);
+      c.due = after(intervalFor(c.S, r));
+    }
+  }
+  c.last_review = nowISO();
+  c.stage = g === 1 ? Math.max(0, (c.stage ?? 0) - 1) : (g >= 3 ? Math.min(3, (c.stage ?? 0) + 1) : (c.stage ?? 0));
+  c.updated_at = nowISO();
+  return c;
+}
+
+/* ============================ ĐỒNG BỘ VỚI GOOGLE SHEET ============================ */
+function queueRead() { try { return JSON.parse(localStorage.getItem(LS.queue) || '[]'); } catch { return []; } }
+function enqueue(action, row) {
+  const q = queueRead(); q.push({ action, row });
+  localStorage.setItem(LS.queue, JSON.stringify(q));
+}
+let flushing = false;
+async function flush(force = false) {
+  if (flushing) return;
+  const q = queueRead();
+  if (!q.length || (!force && q.length < 5)) return;
+  flushing = true;
+  const groups = {};
+  q.forEach(x => (groups[x.action] ||= []).push(x.row));
+  try {
+    for (const [action, rows] of Object.entries(groups)) {
+      await fetch(cfg.apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ token: cfg.token, action, rows })
+      });
+    }
+    localStorage.setItem(LS.queue, JSON.stringify(queueRead().slice(q.length)));
+  } catch (e) {
+    console.warn('Chưa gửi được, giữ lại hàng đợi để thử lại', e);
+  } finally {
+    flushing = false;
+    updateSyncBadge();
+  }
+}
+
+// Gửi nền đều đặn, không chặn thao tác học.
+setInterval(() => { if (navigator.onLine !== false) flush(true); }, 8000);
+window.addEventListener('online', () => flush(true));
+
+// Hiện số thay đổi còn chờ, nếu màn hình đang có chỗ để hiện.
+function updateSyncBadge() {
+  const el = document.getElementById('syncState');
+  if (!el) return;
+  const n = queueRead().length;
+  el.textContent = n ? n + ' thay đổi đang gửi lên sheet…' : 'Đã đồng bộ xong.';
+}
+
+async function loadAll() {
+  const res = await fetch(`${cfg.apiUrl}?token=${encodeURIComponent(cfg.token)}`);
+  const d = await res.json();
+  if (d.error) throw new Error(d.error);
+  DB.raw = (d.raw || []).filter(r => r['Từ vựng']);
+  DB.settings = Object.fromEntries((d.settings || []).map(s => [s.key, s.value]));
+  DB.usage = d.usage_summary || null;
+  DB.progress = {}; DB.enrichment = {};
+  (d.progress || []).forEach(p => DB.progress[p.word_id] = {
+    ...p, S: +p.stability || 0, D: +p.difficulty || 0, reps: +p.reps || 0,
+    lapses: +p.lapses || 0, stage: +p.stage || 0, step: 0
+  });
+  (d.enrichment || []).forEach(e => DB.enrichment[e.word_id] = e);
+}
+
+function cardOf(rawRow) {
+  const p = DB.progress[rawRow.word_id];
+  if (p && p.state) return p;
+  return {
+    word_id: rawRow.word_id, word: rawRow['Từ vựng'], state: 'new', stage: 0,
+    due: nowISO(), S: 0, D: 0, reps: 0, lapses: 0, last_review: '', suspended: '',
+    lang: rawRow['Ngôn ngữ'] || 'en', step: 0
+  };
+}
+function persistCard(c) {
+  DB.progress[c.word_id] = c;
+  enqueue('upsertProgress', {
+    word_id: c.word_id, word: c.word, state: c.state, stage: c.stage, due: c.due,
+    stability: round(c.S, 4), difficulty: round(c.D, 4), reps: c.reps, lapses: c.lapses,
+    last_review: c.last_review, suspended: c.suspended || '', updated_at: nowISO(), lang: c.lang
+  });
+}
+
+/* ============================ GEMINI: 1 HÀM BỌC DUY NHẤT ============================ */
+async function callGemini({ feature, wordId = '', prompt, schema }) {
+  const model = DB.settings.model || 'gemini-2.5-flash';
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${cfg.geminiKey}`;
+  const body = { contents: [{ parts: [{ text: prompt }] }] };
+  if (schema) body.generationConfig = { responseMimeType: 'application/json', responseSchema: schema };
+  let res, json, failed = false;
+  try {
+    res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    json = await res.json();
+    if (json.error) { failed = true; throw new Error(json.error.message); }
+  } catch (e) {
+    failed = true;
+    if (json) logUsage(json, feature + '_error', wordId, model);
+    throw e;
+  }
+  const usage = logUsage(json, feature, wordId, model);
+  const text = json.candidates?.[0]?.content?.parts?.map(p => p.text).join('') || '';
+  const data = schema ? JSON.parse(text.replace(/^```(?:json)?|```$/g, '').trim()) : text;
+  return { data, usage };
+}
+
+// Đọc usageMetadata thật, tính tiền theo đơn giá trong Settings, đẩy vào hàng đợi.
+function logUsage(json, feature, wordId, model) {
+  const u = json.usageMetadata || {};
+  const inT = +u.promptTokenCount || 0;
+  const outT = +u.candidatesTokenCount || 0;
+  const thT = +u.thoughtsTokenCount || 0;
+  const total = +u.totalTokenCount || inT + outT + thT;
+  const pin = +DB.settings.price_in_per_1m || 0;
+  const pout = +DB.settings.price_out_per_1m || 0;
+  const rate = +DB.settings.usd_vnd || 0;
+  const cost = round((inT * pin + (outT + thT) * pout) / 1e6, 6);
+  const row = {
+    ts: nowISO(), feature, word_id: wordId, model,
+    in_tokens: inT, out_tokens: outT, thought_tokens: thT, total_tokens: total,
+    price_in_per_1m: pin, price_out_per_1m: pout,
+    cost_usd: cost, usd_vnd: rate, cost_vnd: round(cost * rate, 2)
+  };
+  enqueue('appendUsage', row);
+  return row;
+}
+
+const ENRICH_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    meaning_fixed: { type: 'STRING' }, pos: { type: 'STRING' }, ipa: { type: 'STRING' },
+    definition_en: { type: 'STRING' }, collocations: { type: 'ARRAY', items: { type: 'STRING' } },
+    cloze_sentence: { type: 'STRING' }, examples: { type: 'ARRAY', items: { type: 'STRING' } },
+    mnemonic: { type: 'STRING' }, emoji: { type: 'STRING' },
+    base_form: { type: 'STRING' }, romanization: { type: 'STRING' }, hanviet: { type: 'STRING' }
+  },
+  required: ['meaning_fixed', 'cloze_sentence', 'emoji']
+};
+
+async function enrich(raw) {
+  const lang = raw['Ngôn ngữ'] === 'ko' ? 'tiếng Hàn' : 'tiếng Anh';
+  const prompt = `Bạn giúp một người Việt học ${lang}.
+Từ/cụm cần học: "${raw['Từ vựng']}"
+Ngữ cảnh người học đã gặp: "${(raw['Câu / Ngữ cảnh'] || '').slice(0, 600)}"
+Nghĩa người học tự ghi: "${raw['Nghĩa tiếng Việt'] || ''}"
+
+Trả JSON:
+- meaning_fixed: nghĩa tiếng Việt ĐÚNG trong ngữ cảnh này, ngắn gọn (sửa nếu nghĩa người học ghi bị sai).
+- pos: từ loại trong ngữ cảnh. ipa: phiên âm (để trống nếu là tiếng Hàn).
+- definition_en: định nghĩa tiếng Anh đơn giản.
+- collocations: 3-5 cụm đi kèm thông dụng.
+- cloze_sentence: MỘT câu ngắn, rõ nghĩa, có chứa đúng từ này; rút gọn từ ngữ cảnh gốc nếu ngữ cảnh dài hoặc bị cắt.
+- examples: 2 câu ví dụ mới trình độ B1.
+- mnemonic: mẹo nhớ cho người Việt.
+- emoji: 1-2 emoji.
+- base_form: dạng từ điển (quan trọng với tiếng Hàn, nếu không có thì để trống).
+- romanization: phiên âm Latin nếu là tiếng Hàn.
+- hanviet: âm Hán Việt nếu là từ gốc Hán, ngược lại để trống.`;
+  const { data, usage } = await callGemini({ feature: 'enrich', wordId: raw.word_id, prompt, schema: ENRICH_SCHEMA });
+  const row = {
+    word_id: raw.word_id, word: raw['Từ vựng'],
+    meaning_fixed: data.meaning_fixed || '', pos: data.pos || '', ipa: data.ipa || '',
+    definition_en: data.definition_en || '', collocations: JSON.stringify(data.collocations || []),
+    cloze_sentence: data.cloze_sentence || '', examples: JSON.stringify(data.examples || []),
+    mnemonic: data.mnemonic || '', emoji: data.emoji || '', updated_at: nowISO(),
+    lang: raw['Ngôn ngữ'] || 'en', base_form: data.base_form || '',
+    romanization: data.romanization || '', hanviet: data.hanviet || '',
+    model: usage.model, in_tokens: usage.in_tokens, out_tokens: usage.out_tokens,
+    thought_tokens: usage.thought_tokens, cost_usd: usage.cost_usd, cost_vnd: usage.cost_vnd
+  };
+  DB.enrichment[raw.word_id] = row;
+  enqueue('upsertEnrichment', row);
+  return row;
+}
+
+async function gradeSentence(word, meaning, sentence) {
+  const { data } = await callGemini({
+    feature: 'grade', prompt:
+      `Người Việt đang học từ "${word}" (nghĩa: ${meaning}). Họ viết: "${sentence}".
+Chấm xem có dùng đúng nghĩa, đúng ngữ pháp và tự nhiên không.
+Trả JSON: score (0-3), feedback_vi (1-2 câu, thẳng thắn, hữu ích), corrected (câu đã sửa).`,
+    schema: {
+      type: 'OBJECT', properties: {
+        score: { type: 'INTEGER' }, feedback_vi: { type: 'STRING' }, corrected: { type: 'STRING' }
+      }, required: ['score', 'feedback_vi', 'corrected']
+    }
+  });
+  return data;
+}
+
+/* ============================ XẾP HÀNG ĐỢI THẺ ============================ */
+function buildSession(lang) {
+  const t = new Date();
+  const rows = DB.raw.filter(r => (r['Ngôn ngữ'] || 'en') === lang);
+  const cards = rows.map(r => ({ raw: r, card: cardOf(r) })).filter(x => x.card.suspended !== 'true');
+
+  const due = cards.filter(x => x.card.state !== 'new' && new Date(x.card.due) <= t);
+  const fresh = cards.filter(x => x.card.state === 'new');
+
+  // Thẻ ôn: R thấp nhất (sắp quên nhất) lên trước; hòa thì lapses cao hơn trước.
+  due.forEach(x => {
+    const el = x.card.last_review ? days(t, x.card.last_review) : 0;
+    x.R = x.card.S > 0 ? retrievability(el, x.card.S) : 0;
+  });
+  due.sort((a, b) => a.R - b.R || b.card.lapses - a.card.lapses);
+
+  // Giới hạn từ mới; tồn đọng nhiều thì tạm dừng từ mới.
+  const limit = +DB.settings['daily_new_' + lang] || 0;
+  const todayNew = dailyStat('new_' + lang);
+  const backlog = due.length > 2 * Math.max(10, avgDue());
+  let quota = backlog ? 0 : Math.max(0, limit - todayNew);
+  const newOnes = fresh.slice(0, quota);
+
+  // Rải đều thẻ mới vào giữa các thẻ ôn.
+  const queue = [...due];
+  if (newOnes.length) {
+    const gap = Math.max(3, Math.floor(due.length / newOnes.length) || 3);
+    newOnes.forEach((x, i) => queue.splice(Math.min(queue.length, (i + 1) * gap + i), 0, x));
+  }
+  // Không để 2 thẻ cùng nguồn đứng liền nhau.
+  for (let i = 1; i < queue.length; i++) {
+    if (queue[i].raw['Nguồn (URL)'] && queue[i].raw['Nguồn (URL)'] === queue[i - 1].raw['Nguồn (URL)']) {
+      const j = queue.findIndex((x, k) => k > i && x.raw['Nguồn (URL)'] !== queue[i - 1].raw['Nguồn (URL)']);
+      if (j > -1) [queue[i], queue[j]] = [queue[j], queue[i]];
+    }
+  }
+  return { lang, queue, done: 0, total: queue.length, backlog, newCount: newOnes.length };
+}
+
+function dailyStat(key, add = 0) {
+  const all = JSON.parse(localStorage.getItem(LS.stats) || '{}');
+  const d = new Date().toISOString().slice(0, 10);
+  all[d] ||= {}; all[d][key] = (all[d][key] || 0) + add;
+  if (add) localStorage.setItem(LS.stats, JSON.stringify(all));
+  return all[d][key] || 0;
+}
+function avgDue() {
+  const all = JSON.parse(localStorage.getItem(LS.stats) || '{}');
+  const v = Object.values(all).slice(-7).map(d => d.reviews || 0).filter(Boolean);
+  return v.length ? v.reduce((a, b) => a + b) / v.length : 10;
+}
+
+/* ============================ CHẤM & SO KHỚP ============================ */
+function levenshtein(a, b) {
+  const m = Array.from({ length: b.length + 1 }, (_, i) => [i, ...Array(a.length).fill(0)]);
+  for (let j = 0; j <= a.length; j++) m[0][j] = j;
+  for (let i = 1; i <= b.length; i++) for (let j = 1; j <= a.length; j++)
+    m[i][j] = Math.min(m[i - 1][j] + 1, m[i][j - 1] + 1, m[i - 1][j - 1] + (a[j - 1] === b[i - 1] ? 0 : 1));
+  return m[b.length][a.length];
+}
+const norm = s => String(s || '').toLowerCase().trim().replace(/[.,!?;:"']/g, '');
+// Tiếng Hàn: so khớp ở mức jamo để lỗi một nét chỉ bị tính là lỗi nhẹ.
+const jamo = s => s.normalize('NFD');
+
+function checkAnswer(input, accepted) {
+  const a = jamo(norm(input));
+  let best = 99;
+  accepted.filter(Boolean).forEach(x => best = Math.min(best, levenshtein(a, jamo(norm(x)))));
+  return { exact: best === 0, near: best <= 1, dist: best };
+}
+const RATING = { 1: 'Quên', 2: 'Khó', 3: 'Được', 4: 'Dễ' };
+
+// App tự chấm. Bài chọn đáp án: dưới 2s Dễ, 2-6s Được, 6-15s Khó, trên 15s hoặc sai là Quên.
+// Bài gõ từ: cộng 5 giây cho mỗi mốc; gõ sai dưới 15% ký tự tính là Được, sai nhiều hơn là Quên.
+function autoRating({ mode, exact, errorRatio = 1, ms }) {
+  const typing = mode === 'type';
+  if (!exact) return (typing && errorRatio < 0.15) ? 3 : 1;
+  const s = ms / 1000, b = typing ? 5 : 0;
+  if (s < 2 + b) return 4;
+  if (s < 6 + b) return 3;
+  if (s < 15 + b) return 2;
+  return 1;
+}
+function ratingReason(m, g) {
+  if (!m) return 'theo nhận xét của AI';
+  const pct = Math.round(m.errorRatio * 100);
+  if (!m.exact) {
+    if (m.mode !== 'type') return 'chọn sai';
+    return g === 3 ? `sai ${pct}% ký tự, vẫn tính là nhớ được` : `sai ${pct}% ký tự`;
+  }
+  return `đúng sau ${(m.ms / 1000).toFixed(1)} giây`;
+}
+
+/* ============================ PHÁT ÂM ============================ */
+function speak(text, lang) {
+  if (!('speechSynthesis' in window)) return;
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = lang === 'ko' ? 'ko-KR' : 'en-US';
+  u.rate = 0.95;
+  speechSynthesis.cancel(); speechSynthesis.speak(u);
+}
+
+/* ============================ GIAO DIỆN ============================ */
+function render(html) { app.innerHTML = html; arm(); }
+
+function viewSetup(msg = '') {
+  render(`
+    <div class="bar"><h1>Kết nối dữ liệu</h1></div>
+    <div class="card">
+      ${msg ? `<p class="verdict no">${esc(msg)}</p>` : '<p class="muted">Ba thông tin này chỉ lưu trong trình duyệt của bạn, không gửi đi đâu khác.</p>'}
+      <label for="u">Địa chỉ web app (Apps Script, kết thúc bằng /exec)</label>
+      <input id="u" value="${esc(cfg.apiUrl)}" placeholder="https://script.google.com/macros/s/.../exec">
+      <label for="t">Token bạn đặt trong Code.gs</label>
+      <input id="t" value="${esc(cfg.token)}">
+      <label for="k">Gemini API key (để trống nếu chưa dùng tính năng AI)</label>
+      <input id="k" type="password" value="${esc(cfg.geminiKey)}">
+      <div class="row" style="margin-top:18px"><button class="primary" id="go">Kết nối</button></div>
+    </div>`);
+  $('#go').onclick = once(async () => {
+    cfg.apiUrl = $('#u').value.trim(); cfg.token = $('#t').value.trim(); cfg.geminiKey = $('#k').value.trim();
+    saveCfg(); await boot();
+  });
+}
+
+function viewHome() {
+  const count = lang => {
+    const t = new Date();
+    const rows = DB.raw.filter(r => (r['Ngôn ngữ'] || 'en') === lang);
+    const cards = rows.map(cardOf).filter(c => c.suspended !== 'true');
+    return {
+      due: cards.filter(c => c.state !== 'new' && new Date(c.due) <= t).length,
+      fresh: cards.filter(c => c.state === 'new').length,
+      total: cards.length
+    };
+  };
+  const decks = [['en', 'Tiếng Anh'], ['ko', 'Tiếng Hàn']]
+    .map(([l, name]) => ({ l, name, ...count(l) })).filter(d => d.total);
+
+  render(`
+    <div class="bar"><h1>Hôm nay</h1><button class="ghost" id="settings">Cài đặt</button></div>
+    ${decks.map(d => `
+      <button class="deck" data-lang="${d.l}">
+        <span>
+          <h2>${d.name}</h2>
+          <span class="muted">${d.due} thẻ đến hạn · ${d.fresh} từ chưa học · ${d.total} từ đã lưu</span>
+        </span>
+        <span class="num ${d.due + Math.min(d.fresh, +DB.settings['daily_new_' + d.l] || 0) ? '' : 'zero'}">${d.due}</span>
+      </button>`).join('') || '<div class="card">Chưa có từ nào trong sheet. Lưu vài từ rồi quay lại.</div>'}
+    <p class="muted" id="syncState" style="margin-top:20px"></p>`);
+  updateSyncBadge();
+  app.querySelectorAll('.deck').forEach(b => b.onclick = once(() => startSession(b.dataset.lang)));
+  $('#settings').onclick = once(viewSettings);
+}
+
+function viewSettings() {
+  const u = DB.usage;
+  const vnd = n => (n * (+DB.settings.usd_vnd || 0)).toLocaleString('vi-VN', { maximumFractionDigits: 0 });
+  render(`
+    <div class="bar"><h1>Cài đặt</h1><button class="ghost" id="back">Xong</button></div>
+    <div class="card">
+      <h3>Mức dùng Gemini</h3>
+      ${u ? `<table>
+        <tr><td>Tháng này</td><td>$${round(u.this_month_usd, 4)} · ${vnd(u.this_month_usd)} đ</td></tr>
+        <tr><td>30 ngày qua</td><td>$${round(u.last30d_usd, 4)} · ${vnd(u.last30d_usd)} đ</td></tr>
+        <tr><td>Tổng cộng</td><td>$${round(u.total_usd, 4)}</td></tr>
+        <tr><td>Số lệnh gọi</td><td>${u.calls}</td></tr>
+        <tr><td>Tổng token</td><td>${(u.total_tokens || 0).toLocaleString('vi-VN')}</td></tr>
+      </table>
+      ${DB.settings.billing_mode === 'free' ? '<p class="pill warn" style="display:inline-block;margin-top:12px">Chi phí quy đổi tham khảo — đang dùng hạn mức miễn phí</p>' : ''}`
+      : '<p class="muted">Chưa có dữ liệu. Thêm usage_summary vào doGet trong Code.gs để xem mục này.</p>'}
+    </div>
+    <div class="card">
+      <h3>Thông số học</h3>
+      <table>
+        ${Object.entries(DB.settings).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}
+      </table>
+      <p class="muted">Sửa trực tiếp trong tab Settings của Google Sheet.</p>
+    </div>
+    <div class="card">
+      <h3>Kết nối</h3>
+      <p class="muted">${esc(cfg.apiUrl.slice(0, 60))}…</p>
+      <div class="row">
+        <button id="sync">Gửi ${queueRead().length} thay đổi</button>
+        <button id="edit">Đổi kết nối</button>
+      </div>
+    </div>`);
+  $('#back').onclick = once(viewHome);
+  $('#edit').onclick = once(() => viewSetup());
+  $('#sync').onclick = once(async () => { await flush(true); toast('Đã gửi xong'); viewSettings(); });
+}
+
+/* ============================ PHIÊN HỌC ============================ */
+async function startSession(lang) {
+  session = buildSession(lang);
+  if (!session.total) { toast('Không có thẻ nào đến hạn. Nghỉ thôi.'); return; }
+  if (session.backlog) toast('Đang tồn đọng nhiều thẻ ôn, hôm nay tạm dừng từ mới.', 3500);
+  nextCard();
+}
+
+async function nextCard() {
+  // Thẻ trong bước học ngắn đã tới hạn thì chen lên đầu.
+  const t = new Date();
+  const i = session.queue.findIndex(x =>
+    (x.card.state === 'learning' || x.card.state === 'relearning') && new Date(x.card.due) <= t);
+  if (i > 0) session.queue.unshift(...session.queue.splice(i, 1));
+
+  if (!session.queue.length) {
+    flush(true);
+    render(`<div class="bar"><h1>Xong phiên</h1></div>
+      <div class="card"><p>Bạn đã ôn ${session.done} thẻ.</p>
+      <p class="muted" id="syncState"></p>
+      <button class="primary" id="home">Về trang chủ</button></div>`);
+    updateSyncBadge();
+    $('#home').onclick = once(viewHome);
+    return;
+  }
+  const item = session.queue[0];
+  if (!DB.enrichment[item.card.word_id] && cfg.geminiKey) {
+    render(`<div class="card"><p class="muted">Đang chuẩn bị từ mới…</p></div>`);
+    try { await enrich(item.raw); } catch (e) { toast('Không gọi được Gemini: ' + e.message, 3500); }
+  }
+  showCard(item);
+}
+
+function cardData(item) {
+  const e = DB.enrichment[item.card.word_id] || {};
+  const raw = item.raw;
+  const word = raw['Từ vựng'];
+  const meaning = e.meaning_fixed || raw['Nghĩa tiếng Việt'] || '';
+  const sentence = e.cloze_sentence || raw['Câu / Ngữ cảnh'] || '';
+  return { e, raw, word, meaning, sentence, lang: raw['Ngôn ngữ'] || 'en' };
+}
+
+function showCard(item) {
+  const d = cardData(item);
+  const stage = item.card.stage ?? 0;
+  const started = Date.now();
+  const head = `
+    <div class="progress"><i style="width:${(session.done / session.total) * 100}%"></i></div>
+    <div class="bar"><span class="muted">${session.done + 1}/${session.total} · ${item.card.state === 'new' ? 'từ mới' : 'ôn tập'}</span>
+    <button class="ghost" id="quit">Dừng</button></div>`;
+
+  const finish = (rating, extra = '', metrics = null) => reveal(item, d, rating, extra, metrics);
+
+  if (stage === 0) {
+    const others = DB.raw.filter(r => r.word_id !== d.raw.word_id)
+      .map(r => (DB.enrichment[r.word_id]?.meaning_fixed) || r['Nghĩa tiếng Việt']).filter(Boolean);
+    const opts = [d.meaning, ...shuffle(others).slice(0, 3)];
+    render(head + `
+      <div class="card">
+        <div class="word">${esc(d.word)}</div>
+        ${d.sentence ? `<p class="context">${highlight(d.sentence, d.word)}</p>` : ''}
+        <p class="muted">Nghĩa nào đúng trong câu này?</p>
+        <div id="opts">${shuffle(opts).map(o => `<button class="choice" data-v="${esc(o)}">${esc(o)}</button>`).join('')}</div>
+      </div>`);
+    app.querySelectorAll('.choice').forEach(b => b.onclick = once(() => {
+      const ok = b.dataset.v === d.meaning;
+      b.classList.add(ok ? 'right' : 'wrong');
+      const m = { mode: 'choice', exact: ok, errorRatio: ok ? 0 : 1, ms: Date.now() - started };
+      finish(autoRating(m), '', m);
+    }));
+  } else if (stage === 3) {
+    render(head + `
+      <div class="card">
+        <div class="meaning">${esc(d.meaning)}</div>
+        <p class="muted">Viết một câu của riêng bạn có dùng “${esc(d.word)}”.</p>
+        <textarea id="ans" autocapitalize="off"></textarea>
+        <div class="row" style="margin-top:12px"><button class="primary" id="ok">Chấm câu</button></div>
+      </div>`);
+    $('#ok').onclick = once(async () => {
+      const text = $('#ans').value.trim();
+      if (!text) return;
+      $('#ok').disabled = true; $('#ok').textContent = 'Đang chấm…';
+      let fb = null;
+      try { fb = await gradeSentence(d.word, d.meaning, text); }
+      catch { toast('Không chấm được, bạn tự đánh giá nhé'); }
+      finish(fb ? [1, 2, 3, 4][clamp(fb.score, 0, 3)] : 3,
+        fb ? `<p class="verdict ${fb.score >= 2 ? 'ok' : 'no'}">${esc(fb.feedback_vi)}</p>
+              <p class="context">${esc(fb.corrected)}</p>` : '');
+    });
+  } else {
+    const hint = stage === 1
+      ? `<p class="context">${blankOut(d.sentence, d.word)}</p><p class="muted">${esc(d.meaning)} · bắt đầu bằng “${esc(d.word.slice(0, 1))}”</p>`
+      : `<div class="meaning">${esc(d.meaning)}</div>${d.e.emoji ? `<p style="font-size:1.6rem;margin:4px 0">${esc(d.e.emoji)}</p>` : ''}`;
+    render(head + `
+      <div class="card">
+        ${hint}
+        <label for="ans">Gõ từ</label>
+        <input id="ans" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+        <div class="row" style="margin-top:12px"><button class="primary" id="ok">Kiểm tra</button></div>
+      </div>`);
+    $('#ans').focus();
+    const submit = () => {
+      const r = checkAnswer($('#ans').value, [d.word, d.e.base_form]);
+      const len = Math.max(norm(d.word).length, 1);
+      const m = { mode: 'type', exact: r.exact, errorRatio: Math.min(1, r.dist / len), ms: Date.now() - started };
+      finish(autoRating(m), '', m);
+    };
+    const guarded = once(submit);
+    $('#ok').onclick = guarded;
+    $('#ans').onkeydown = e => { if (e.key === 'Enter' && !e.repeat) guarded(); };
+  }
+  $('#quit').onclick = once(() => { flush(true); viewHome(); });
+}
+
+function reveal(item, d, rating, extra, metrics) {
+  const e = d.e, colls = safeList(e.collocations), exs = safeList(e.examples);
+  const differs = e.meaning_fixed && d.raw['Nghĩa tiếng Việt'] &&
+    norm(e.meaning_fixed) !== norm(d.raw['Nghĩa tiếng Việt']);
+  render(`
+    <div class="progress"><i style="width:${((session.done + 1) / session.total) * 100}%"></i></div>
+    <div class="card">
+      <div class="word">${esc(d.word)} <button class="ghost" id="say">🔊</button></div>
+      <div class="muted">${esc([e.ipa, e.romanization, e.pos].filter(Boolean).join(' · '))}</div>
+      <div class="meaning" style="margin-top:8px">${esc(d.meaning)} ${esc(e.emoji || '')}</div>
+      ${e.hanviet ? `<p class="muted">Hán Việt: ${esc(e.hanviet)}</p>` : ''}
+      ${differs ? `<p class="pill warn">AI gợi ý nghĩa khác với ghi chú của bạn: “${esc(d.raw['Nghĩa tiếng Việt'])}”</p>` : ''}
+      ${extra}
+      ${d.raw['Câu / Ngữ cảnh'] ? `<p class="context">${highlight(d.raw['Câu / Ngữ cảnh'], d.word)}</p>` : ''}
+      ${colls.length ? `<div class="pills">${colls.map(c => `<span class="pill">${esc(c)}</span>`).join('')}</div>` : ''}
+      ${exs.length ? `<p class="muted" style="margin-top:12px">${exs.map(esc).join('<br>')}</p>` : ''}
+      ${e.mnemonic ? `<p class="muted">Mẹo nhớ: ${esc(e.mnemonic)}</p>` : ''}
+      ${d.raw['Nguồn (URL)'] ? `<p class="muted"><a href="${esc(d.raw['Nguồn (URL)'])}" target="_blank" rel="noopener">${esc(d.raw['Tiêu đề trang'] || 'Nguồn')}</a></p>` : ''}
+      <div class="auto">
+        <span>
+          <span class="label">App chấm</span>
+          <span class="value">${RATING[rating]}</span>
+          <span class="muted"> · ${esc(ratingReason(metrics, rating))}</span>
+        </span>
+        <button class="primary" id="next">Tiếp tục</button>
+      </div>
+      <div class="rate">
+        ${[[1, 'Quên', 'làm lại'], [2, 'Khó', 'chật vật'], [3, 'Được', 'nhớ ra'], [4, 'Dễ', 'nhớ ngay']]
+          .map(([g, t, s]) => `<button data-g="${g}" class="${g === rating ? 'primary' : ''}">${t}<b>${s}</b></button>`).join('')}
+      </div>
+    </div>`);
+  // Màn hình đáp án vừa thay chỗ nút vừa bấm, nên chặn lâu hơn một chút.
+  arm(700);
+  $('#next').onclick = once(() => commit(item, d, rating));
+  $('#say').onclick = () => speak(d.word, d.lang);
+  if (DB.settings.autoplay !== 'false') speak(d.word, d.lang);
+  app.querySelectorAll('.rate button').forEach(b => b.onclick = once(() => commit(item, d, +b.dataset.g)));
+}
+
+async function commit(item, d, g) {
+  const stageBefore = item.card.stage ?? 0;
+  const updated = schedule(item.card, g);
+  if (item.card.state === 'new') dailyStat('new_' + d.lang, 1);
+  dailyStat('reviews', 1);
+  persistCard(updated);
+  enqueue('appendLog', {
+    ts: nowISO(), word_id: updated.word_id,
+    exercise: ['choice', 'cloze', 'recall', 'produce'][stageBefore],
+    rating: g, correct: g > 1 ? 'true' : 'false', answer: '', ms: ''
+  });
+  item.card = updated;
+  session.done++;
+  session.queue.shift();
+  // Thẻ chưa qua bước học ngắn thì quay lại hàng đợi, không hiện lại ngay lập tức.
+  if (updated.state === 'learning' || updated.state === 'relearning') {
+    session.queue.splice(Math.min(session.queue.length, 2), 0, item);
+    session.total++;
+  }
+  flush();          // gửi nền, không chờ
+  nextCard();
+}
+
+/* ============================ HỖ TRỢ HIỂN THỊ ============================ */
+const shuffle = a => a.map(v => [Math.random(), v]).sort((x, y) => x[0] - y[0]).map(x => x[1]);
+const safeList = s => { try { const v = JSON.parse(s || '[]'); return Array.isArray(v) ? v : []; } catch { return []; } };
+const rx = w => new RegExp(`(${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+const highlight = (text, word) => esc(text).replace(rx(esc(word)), '<b>$1</b>');
+const blankOut = (text, word) => esc(text).replace(rx(esc(word)), '<span class="blank">______</span>');
+
+/* ============================ KHỞI ĐỘNG ============================ */
+async function boot() {
+  if (!cfg.apiUrl || !cfg.token) return viewSetup();
+  render('<div class="card"><p class="muted">Đang tải dữ liệu…</p></div>');
+  try {
+    await loadAll();
+    await flush(true);
+    viewHome();
+  } catch (e) {
+    viewSetup('Không tải được dữ liệu: ' + e.message + '. Kiểm tra lại địa chỉ và token, và nhớ deploy bản mới sau khi sửa Code.gs.');
+  }
+}
+// Rời trang: gửi nốt bằng sendBeacon để trình duyệt không hủy request giữa chừng.
+window.addEventListener('pagehide', () => {
+  const q = queueRead();
+  if (!q.length || !navigator.sendBeacon) return;
+  const groups = {};
+  q.forEach(x => (groups[x.action] ||= []).push(x.row));
+  let sent = true;
+  for (const [action, rows] of Object.entries(groups)) {
+    const blob = new Blob([JSON.stringify({ token: cfg.token, action, rows })], { type: 'text/plain;charset=utf-8' });
+    sent = navigator.sendBeacon(cfg.apiUrl, blob) && sent;
+  }
+  if (sent) localStorage.setItem(LS.queue, '[]');
+});
+boot();
+</script>
+</body>
+</html>

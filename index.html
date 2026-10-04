@@ -256,7 +256,7 @@ button.tw:focus-visible{outline:2px solid #007aff;outline-offset:1px}
 <div id="app"></div>
 <script>
 /* ============================ CẤU HÌNH & TIỆN ÍCH ============================ */
-const APP_VERSION = '2026.10.05-5';   // tăng mỗi lần cập nhật để app tự nhận bản mới
+const APP_VERSION = '2026.10.05-6';   // tăng mỗi lần cập nhật để app tự nhận bản mới
 const LS = {
   cfg: 'vocab.cfg', queue: 'vocab.queue', stats: 'vocab.dailyStats'
 };
@@ -493,36 +493,94 @@ function persistCard(c) {
 }
 
 /* ============================ GEMINI: 1 HÀM BỌC DUY NHẤT ============================ */
-async function callGemini({ feature, wordId = '', prompt, schema }) {
-  const model = DB.settings.model || 'gemini-3.5-flash-lite';
+/* ---------- Model Gemini: thứ tự ưu tiên + tự chuyển khi hết hạn mức hoặc lỗi ----------
+   Giá: USD / 1 triệu token, theo trang giá chính thức của Google (đầu ra đã gồm token suy luận). */
+const MODELS = [
+  { id: 'gemini-3.5-flash-lite', name: 'Gemini 3.5 Flash Lite', in: 0.30, out: 2.50 },
+  { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash Lite', in: 0.25, out: 1.50 },
+  { id: 'gemini-3.5-flash',      name: 'Gemini 3.5 Flash',      in: 1.50, out: 9.00 },
+  { id: 'gemini-2.5-flash',      name: 'Gemini 2.5 Flash',      in: 0.30, out: 2.50 },
+  { id: 'gemini-2.0-flash',      name: 'Gemini 2 Flash',        in: 0.10, out: 0.40, retired: '1/6/2026' },
+  { id: 'gemini-2.0-flash-lite', name: 'Gemini 2 Flash Lite',   in: 0.075, out: 0.30, retired: '1/6/2026' }
+];
+const modelInfo = id => MODELS.find(m => m.id === id);
+const MODEL_DOWN = 'vocab.modelDown';     // { modelId: hết-tạm-khóa-lúc (ms) }
+const downMap = () => { try { return JSON.parse(localStorage.getItem(MODEL_DOWN) || '{}'); } catch { return {}; } };
+function markDown(id, ms) { const m = downMap(); m[id] = Date.now() + ms; localStorage.setItem(MODEL_DOWN, JSON.stringify(m)); }
+const isDown = id => (downMap()[id] || 0) > Date.now();
+let lastModelUsed = '';
+
+// Model người dùng chọn đứng đầu, sau đó là các model còn lại theo thứ tự ưu tiên.
+function modelChain() {
+  const chosen = DB.settings.model && DB.settings.model !== 'auto' ? DB.settings.model : MODELS[0].id;
+  const ids = [chosen, ...MODELS.map(m => m.id).filter(id => id !== chosen)];
+  const up = ids.filter(id => !isDown(id));
+  return up.length ? up : ids;                 // tất cả đang bị khóa tạm thì vẫn thử lại từ đầu
+}
+
+class GeminiError extends Error {
+  constructor(msg, { status = '', code = 0, fallback = true } = {}) { super(msg); this.status = status; this.code = code; this.fallback = fallback; }
+}
+
+async function callModel(model, { feature, wordId, prompt, schema }) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${cfg.geminiKey}`;
   const body = { contents: [{ parts: [{ text: prompt }] }] };
   if (schema) body.generationConfig = { responseMimeType: 'application/json', responseSchema: schema };
-  let res, json, failed = false;
+  let json;
   try {
-    res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     json = await res.json();
-    if (json.error) { failed = true; throw new Error(json.error.message); }
   } catch (e) {
-    failed = true;
-    if (json) logUsage(json, feature + '_error', wordId, model);
-    throw e;
+    throw new GeminiError('Không kết nối được tới Gemini (kiểm tra mạng).', { fallback: false });
+  }
+  if (json.error) {
+    const st = json.error.status || '', code = json.error.code || 0, msg = json.error.message || 'Lỗi không rõ';
+    if (json.usageMetadata) logUsage(json, feature + '_error', wordId, model);
+    const badKey = /API key|API_KEY/i.test(msg) && (code === 400 || code === 401 || code === 403);
+    throw new GeminiError(msg, { status: st, code, fallback: !badKey });
   }
   const usage = logUsage(json, feature, wordId, model);
   const text = json.candidates?.[0]?.content?.parts?.map(p => p.text).join('') || '';
-  const data = schema ? JSON.parse(text.replace(/^```(?:json)?|```$/g, '').trim()) : text;
+  let data = text;
+  if (schema) {
+    try { data = JSON.parse(text.replace(/^```(?:json)?|```$/g, '').trim()); }
+    catch { throw new GeminiError('Model trả kết quả không đúng định dạng.', { status: 'BAD_OUTPUT' }); }
+  }
   return { data, usage };
 }
 
-// Đọc usageMetadata thật, tính tiền theo đơn giá trong Settings, đẩy vào hàng đợi.
+// Gọi lần lượt theo chuỗi ưu tiên. Hết hạn mức (429) → khóa model 10 phút; model không tồn tại/đã ngừng (404) → khóa 24 giờ.
+async function callGemini(opts) {
+  const chain = modelChain();
+  let lastErr = null;
+  for (const model of chain) {
+    try {
+      const r = await callModel(model, opts);
+      if (model !== chain[0]) toast(`${modelInfo(chain[0])?.name || chain[0]} đang lỗi, đã chuyển sang ${modelInfo(model)?.name || model}.`, 3500);
+      lastModelUsed = model;
+      return r;
+    } catch (e) {
+      lastErr = e;
+      if (!e.fallback) break;                                  // sai API key / mất mạng: đổi model cũng vô ích
+      if (e.code === 429 || e.status === 'RESOURCE_EXHAUSTED') markDown(model, 10 * 60e3);
+      else if (e.code === 404 || e.status === 'NOT_FOUND') markDown(model, 24 * 3600e3);
+      else if (e.code >= 500) markDown(model, 2 * 60e3);
+      console.warn(`Gemini ${model} lỗi, thử model kế tiếp:`, e.message);
+    }
+  }
+  throw lastErr || new Error('Không gọi được Gemini');
+}
+
+// Đọc usageMetadata thật, tính tiền theo đơn giá của đúng model đã trả lời.
 function logUsage(json, feature, wordId, model) {
   const u = json.usageMetadata || {};
   const inT = +u.promptTokenCount || 0;
   const outT = +u.candidatesTokenCount || 0;
   const thT = +u.thoughtsTokenCount || 0;
   const total = +u.totalTokenCount || inT + outT + thT;
-  const pin = +DB.settings.price_in_per_1m || 0;
-  const pout = +DB.settings.price_out_per_1m || 0;
+  const info = modelInfo(model);
+  const pin = info ? info.in : (+DB.settings.price_in_per_1m || 0);
+  const pout = info ? info.out : (+DB.settings.price_out_per_1m || 0);
   const rate = +DB.settings.usd_vnd || 0;
   const cost = round((inT * pin + (outT + thT) * pout) / 1e6, 6);
   const row = {
@@ -792,11 +850,13 @@ function checkAnswer(input, accepted) {
 const RATING = { 1: 'Quên', 2: 'Khó', 3: 'Được', 4: 'Dễ' };
 
 // App tự chấm. Bài chọn đáp án: dưới 2s Dễ, 2-6s Được, 6-15s Khó, trên 15s hoặc sai là Quên.
-// Bài gõ từ: cộng 5 giây cho mỗi mốc; gõ sai dưới 15% ký tự tính là Được, sai nhiều hơn là Quên.
+// Bài gõ từ: cộng thêm `type_extra_sec` giây (mặc định 10) cho mỗi mốc → dưới 12s Dễ, 12–16s Được, 16–25s Khó.
+// Gõ sai dưới 15% ký tự tính là Được, sai nhiều hơn là Quên.
+const typeExtra = () => { const v = parseFloat(DB.settings.type_extra_sec); return isFinite(v) && v >= 0 ? v : 10; };
 function autoRating({ mode, exact, errorRatio = 1, ms }) {
   const typing = mode === 'type';
   if (!exact) return (typing && errorRatio < 0.15) ? 3 : 1;
-  const s = ms / 1000, b = typing ? 5 : 0;
+  const s = ms / 1000, b = typing ? typeExtra() : 0;
   if (s < 2 + b) return 4;
   if (s < 6 + b) return 3;
   if (s < 15 + b) return 2;
@@ -894,6 +954,7 @@ function viewSettings() {
       ${DB.settings.billing_mode === 'free' ? '<p class="pill warn" style="display:inline-block;margin-top:12px">Chi phí quy đổi tham khảo — đang dùng hạn mức miễn phí</p>' : ''}`
       : '<p class="muted">Chưa có dữ liệu. Thêm usage_summary vào doGet trong Code.gs để xem mục này.</p>'}
     </div>
+    ${modelCard()}
     ${aiDataCard()}
     <div class="card">
       <h3>Thông số học</h3>
@@ -914,9 +975,36 @@ function viewSettings() {
   $('#back').onclick = once(viewHome);
   $('#edit').onclick = once(() => viewSetup());
   $('#sync').onclick = once(async () => { await flush(true); toast('Đã gửi xong'); viewSettings(); });
+  app.querySelectorAll('[data-model]').forEach(b => b.onclick = once(() => {
+    const id = b.dataset.model;
+    DB.settings.model = id;
+    enqueue('saveSettings', { key: 'model', value: id });   // lưu vào tab Settings để mọi thiết bị dùng chung
+    const m = downMap(); delete m[id]; localStorage.setItem(MODEL_DOWN, JSON.stringify(m));
+    flush(true);
+    toast(`Đã chọn ${modelInfo(id).name}. Nếu model này lỗi, app tự chuyển sang model kế tiếp.`, 3000);
+    viewSettings();
+  }));
   const be = $('#bulkEnrich'), br = $('#bulkRefresh');
   if (be) be.onclick = once(() => { bulkRun('enrich'); });
   if (br) br.onclick = once(() => { bulkRun('refresh'); });
+}
+
+function modelCard() {
+  const chosen = DB.settings.model && modelInfo(DB.settings.model) ? DB.settings.model : MODELS[0].id;
+  const down = downMap();
+  return `<div class="card">
+    <h3>Model AI</h3>
+    <p class="muted">Chọn model dùng đầu tiên. Nếu model đó hết hạn mức hoặc lỗi, app tự chuyển xuống model kế tiếp theo thứ tự bên dưới.</p>
+    ${MODELS.map((m, i) => {
+      const st = m.retired ? `Google đã ngừng từ ${m.retired}`
+        : (down[m.id] > Date.now() ? `tạm bỏ qua đến ${new Date(down[m.id]).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}` : '');
+      return `<button class="choice ${m.id === chosen ? 'right' : ''}" data-model="${m.id}">
+        <span class="k" style="display:inline-block">${i + 1}</span>${esc(m.name)}
+        <span class="muted"> · $${m.in}/$${m.out} mỗi 1 triệu token${st ? ' · ' + st : ''}${m.id === chosen ? ' · đang dùng' : ''}</span>
+      </button>`;
+    }).join('')}
+    ${lastModelUsed ? `<p class="muted">Lần gọi gần nhất dùng: ${esc(modelInfo(lastModelUsed)?.name || lastModelUsed)}</p>` : ''}
+  </div>`;
 }
 
 function aiDataLists() {
@@ -1379,12 +1467,16 @@ function computeStats(lang) {
     while (any(dayKey(now - i * 864e5))) { streak++; i++; }
   }
 
-  // Từ hay quên nhất
-  const lapsy = cards.filter(x => c(x).lapses > 0)
-    .sort((a, b) => c(b).lapses - c(a).lapses).slice(0, 10);
+  // Từ hay quên nhất: đếm thật số lần trả lời "Quên" trong ReviewLog (server đã lọc dòng trùng / bấm dồn)
+  const W = (DB.review && DB.review.words) || null;
+  const lapsy = W ? cards.map(x => ({ ...x, st: W[x.raw.word_id] }))
+    .filter(x => x.st && x.st.fail > 0)
+    .sort((a, b) => b.st.fail - a.st.fail || (b.st.fail / b.st.n) - (a.st.fail / a.st.n) || String(b.st.last_fail).localeCompare(String(a.st.last_fail)))
+    .slice(0, 10) : [];
+  const lapsyReal = !!W;
 
   return {
-    total: cards.length, nw, learning, young, mature, avgS, forecast, hist, agg, streak, lapsy,
+    total: cards.length, nw, learning, young, mature, avgS, forecast, hist, agg, streak, lapsy, lapsyReal,
     todayN: hist[hist.length - 1].n, todayP: hist[hist.length - 1].p, hasHistory
   };
 }
@@ -1455,9 +1547,14 @@ function statsHTML(lang, note) {
 
     <div class="card">
       <h3>Từ hay quên nhất</h3>
-      ${s.lapsy.length ? s.lapsy.map(x => {
-        const e = DB.enrichment[x.card.word_id] || {};
-        return `<div class="li"><span><span class="w">${esc(x.raw['Từ vựng'])}</span><span class="m">${esc(e.meaning_fixed || x.raw['Nghĩa tiếng Việt'] || '')}</span></span><span class="c">${x.card.lapses}×</span></div>`;
+      <p class="muted">Đếm từ lịch sử trả lời thật trong 120 ngày (gồm cả ôn thêm, không tính truyện ngắn).</p>
+      ${!s.lapsyReal ? '<p class="pill warn" style="display:inline-block">Cần dán Code_v7.gs và deploy bản mới để xem mục này.</p>'
+        : s.lapsy.length ? s.lapsy.map(x => {
+        const e = DB.enrichment[x.raw.word_id] || {};
+        const pct = Math.round((x.st.fail / x.st.n) * 100);
+        const when = x.st.last_fail ? new Date(x.st.last_fail).toLocaleDateString('vi-VN') : '';
+        return `<div class="li"><span><span class="w">${esc(x.raw['Từ vựng'])}</span><span class="m">${esc(e.meaning_fixed || x.raw['Nghĩa tiếng Việt'] || '')}</span>
+          <br><span class="muted">quên ${x.st.fail}/${x.st.n} lần làm bài · lần quên gần nhất ${when}</span></span><span class="c">${pct}%</span></div>`;
       }).join('') : '<p class="muted">Chưa có từ nào bị quên. Cứ thế phát huy.</p>'}
       ${s.lapsy.length && lang !== 'all'
         ? `<div class="row" style="margin-top:14px"><button class="primary" id="practice">Luyện riêng ${s.lapsy.length} từ này</button></div>`

@@ -210,6 +210,8 @@ td:last-child{text-align:right;font-family:ui-monospace,SFMono-Regular,Menlo,mon
 .bars .col{flex:1;min-width:0;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:4px}
 .bars i{display:block;width:100%;border-radius:8px 8px 4px 4px;border:1px solid rgba(10,132,255,.35);
   background:linear-gradient(180deg,rgba(255,255,255,.9),rgba(10,132,255,.4))}
+.bars i{display:flex;flex-direction:column;overflow:hidden}
+.bars i em{display:block;width:100%;background:rgba(167,139,250,.6)}
 .bars i.hl{background:linear-gradient(180deg,rgba(255,255,255,.95),rgba(10,132,255,.8))}
 .bars .v{height:12px;font-size:10px;font-weight:700;color:rgba(28,28,46,.6);font-family:ui-monospace,Menlo,monospace}
 .bars .l{font-size:10px;font-weight:600;color:rgba(28,28,46,.45);white-space:nowrap}
@@ -768,36 +770,119 @@ function viewSettings() {
 }
 
 /* ============================ PHIÊN HỌC ============================ */
+const isLearning = c => c.state === 'learning' || c.state === 'relearning';
+
+/* Phiên học có hai phần:
+   - queue: thẻ ĐẾN HẠN + từ mới trong hạn mức → kết quả TÍNH vào lịch ôn (FSRS).
+   - practice: thẻ CHƯA đến hạn, xếp theo ưu tiên thông thường (sắp quên nhất trước) → chỉ GHI LOG
+     (số lần, đúng/sai) mà không đổi lịch ôn, độ bền hay cấp bài tập của từ. */
+function newSession(lang, queue, extra = {}) {
+  return { lang, queue, done: 0, total: queue.length, backlog: false, newCount: 0,
+           practice: [], practiced: 0, practiceMode: false, recent: [], current: null, ...extra };
+}
+
 async function startSession(lang) {
   session = buildSession(lang);
-  if (!session.total) { toast('Không có thẻ nào đến hạn. Nghỉ thôi.'); return; }
-  if (session.backlog) toast('Đang tồn đọng nhiều thẻ ôn, hôm nay tạm dừng từ mới.', 3500);
+  Object.assign(session, newSession(lang, session.queue, { backlog: session.backlog, newCount: session.newCount }));
+  if (!session.total) {
+    if (!buildPracticePool(lang).length) { toast('Chưa có từ nào để ôn. Lưu thêm từ rồi quay lại.'); return; }
+    session.practiceMode = true;
+    toast('Không có thẻ đến hạn. Đang ôn thêm, kết quả không tính vào lịch ôn.', 3500);
+  } else if (session.backlog) toast('Đang tồn đọng nhiều thẻ ôn, hôm nay tạm dừng từ mới.', 3500);
   nextCard();
 }
 
-async function nextCard() {
-  // Thẻ trong bước học ngắn đã tới hạn thì chen lên đầu.
-  const t = new Date();
-  const i = session.queue.findIndex(x =>
-    (x.card.state === 'learning' || x.card.state === 'relearning') && new Date(x.card.due) <= t);
-  if (i > 0) session.queue.unshift(...session.queue.splice(i, 1));
-
-  if (!session.queue.length) {
-    flush(true);
-    render(`<div class="bar"><h1>Xong phiên</h1></div>
-      <div class="card"><p>Bạn đã ôn ${session.done} thẻ.</p>
-      <p class="muted" id="syncState"></p>
-      <button class="primary" id="home">Về trang chủ</button></div>`);
-    updateSyncBadge();
-    $('#home').onclick = once(viewHome);
-    return;
+// Thẻ chưa đến hạn của ngôn ngữ đang học, xếp theo ưu tiên: R thấp nhất trước, rồi số lần quên.
+function buildPracticePool(lang) {
+  const now = Date.now();
+  const busy = new Set([...(session ? session.queue : []), session && session.current].filter(Boolean).map(x => x.raw.word_id));
+  // Từ đã gặp trong phiên này xếp xuống cuối; 5 từ vừa ôn thêm xếp cuối cùng, để không lặp lại ngay.
+  const seen = new Set(session ? session.recent : []);
+  const last5 = new Set(session ? session.recent.slice(-5) : []);
+  const rank = id => last5.has(id) ? 2 : seen.has(id) ? 1 : 0;
+  const items = DB.raw.filter(r => (r['Ngôn ngữ'] || 'en') === lang)
+    .map(r => ({ raw: r, card: cardOf(r) }))
+    .filter(x => x.card.suspended !== 'true' && x.card.state !== 'new' && !busy.has(x.raw.word_id)
+              && new Date(x.card.due).getTime() > now);
+  items.forEach(x => {
+    const el = x.card.last_review ? days(new Date(), x.card.last_review) : 0;
+    x.R = x.card.S > 0 ? retrievability(el, x.card.S) : 0;
+  });
+  items.sort((a, b) => (rank(a.raw.word_id) - rank(b.raw.word_id)) || a.R - b.R || b.card.lapses - a.card.lapses);
+  for (let i = 1; i < items.length; i++) {           // tránh 2 từ cùng bài báo đứng liền nhau
+    const src = x => x.raw['Nguồn (URL)'];
+    if (src(items[i]) && src(items[i]) === src(items[i - 1])) {
+      const j = items.findIndex((x, k) => k > i && src(x) !== src(items[i - 1]));
+      if (j > -1) [items[i], items[j]] = [items[j], items[i]];
+    }
   }
-  const item = session.queue[0];
+  return items.map(x => ({ raw: x.raw, card: x.card, practice: true }));
+}
+
+function nextPractice() {
+  if (!session.practice.length && !session.custom) session.practice = buildPracticePool(session.lang);
+  return session.practice.shift() || null;
+}
+
+// Chọn thẻ kế tiếp. Trả về null nếu hết thẻ tính điểm và chưa bật ôn thêm.
+function pickNext() {
+  const now = Date.now();
+  const q = session.queue;
+  const waiting = x => isLearning(x.card) && new Date(x.card.due).getTime() > now;
+  // 1) thẻ đang ở bước học ngắn đã tới giờ, 2) thẻ đến hạn / từ mới theo thứ tự đã xếp
+  let i = q.findIndex(x => isLearning(x.card) && !waiting(x));
+  if (i < 0) i = q.findIndex(x => !waiting(x));
+  if (i > -1) return { item: q.splice(i, 1)[0], scored: true };
+  // 3) chỉ còn thẻ đang chờ bước học ngắn: lấp khoảng trống bằng thẻ ôn thêm
+  if (q.length) {
+    const p = nextPractice();
+    if (p) return { item: p, scored: false };
+    q.sort((a, b) => new Date(a.card.due) - new Date(b.card.due));   // không có gì khác: học trước giờ một chút
+    return { item: q.shift(), scored: true };
+  }
+  // 4) hết thẻ tính điểm
+  if (session.practiceMode || session.custom) {
+    const p = nextPractice();
+    if (p) return { item: p, scored: false };
+  }
+  return null;
+}
+
+async function nextCard() {
+  const pick = pickNext();
+  if (!pick) return endScreen();
+  const item = pick.item;
+  item._scored = pick.scored;
+  session.current = item;
   if (!DB.enrichment[item.card.word_id] && cfg.geminiKey) {
     render(`<div class="card"><p class="muted">Đang chuẩn bị từ mới…</p></div>`);
     try { await enrich(item.raw); } catch (e) { toast('Không gọi được Gemini: ' + e.message, 3500); }
   }
   showCard(item);
+}
+
+function endScreen() {
+  flush(true);
+  session.current = null;
+  const canMore = !session.custom && buildPracticePool(session.lang).length > 0;
+  const parts = [];
+  if (session.done) parts.push(`${session.done} thẻ đến hạn`);
+  if (session.practiced) parts.push(`${session.practiced} lượt ôn thêm`);
+  render(`<div class="bar"><h1>Xong phiên</h1></div>
+    <div class="card">
+      <p>${parts.length ? 'Bạn đã ôn ' + parts.join(' và ') + '.' : 'Không còn thẻ nào.'}</p>
+      ${canMore ? '<p class="muted">Vẫn muốn học tiếp? Phần ôn thêm chỉ ghi lại số lần và đúng/sai, không làm thay đổi lịch ôn của từ.</p>' : ''}
+      <p class="muted" id="syncState"></p>
+      <div class="row" style="margin-top:14px">
+        ${canMore ? '<button class="primary" id="more">Ôn thêm</button>' : ''}
+        <button class="${canMore ? '' : 'primary'}" id="home">Về trang chủ</button>
+      </div>
+      ${canMore ? '<p class="muted kbdhint">Enter để ôn thêm</p>' : ''}
+    </div>`);
+  updateSyncBadge();
+  $('#home').onclick = once(viewHome);
+  const more = $('#more');
+  if (more) more.onclick = once(() => { session.practiceMode = true; nextCard(); });
 }
 
 function cardData(item) {
@@ -815,8 +900,10 @@ function showCard(item) {
   const stage = item.card.stage ?? 0;
   const started = Date.now();
   const head = `
-    <div class="progress"><i style="width:${(session.done / session.total) * 100}%"></i></div>
-    <div class="bar"><span class="muted">${session.done + 1}/${session.total} · ${item.card.state === 'new' ? 'từ mới' : 'ôn tập'}</span>
+    <div class="progress"><i style="width:${progressPct(0)}%"></i></div>
+    <div class="bar"><span class="muted">${item._scored
+      ? `${session.done + 1}/${session.total} · ${item.card.state === 'new' ? 'từ mới' : 'ôn tập'}`
+      : `<span class="pill accent">Ôn thêm · không tính điểm</span> ${session.practiced ? '· đã ôn thêm ' + session.practiced : ''}`}</span>
     <button class="ghost" id="quit">Dừng</button></div>`;
 
   const finish = (rating, extra = '', metrics = null) => reveal(item, d, rating, extra, metrics);
@@ -894,7 +981,7 @@ function reveal(item, d, rating, extra, metrics) {
   const differs = e.meaning_fixed && d.raw['Nghĩa tiếng Việt'] &&
     norm(e.meaning_fixed) !== norm(d.raw['Nghĩa tiếng Việt']);
   render(`
-    <div class="progress"><i style="width:${((session.done + 1) / session.total) * 100}%"></i></div>
+    <div class="progress"><i style="width:${progressPct(item._scored ? 1 : 0)}%"></i></div>
     <div class="card">
       <div class="word">${esc(d.word)} <button class="ghost" id="say">🔊</button></div>
       <div class="muted">${esc([e.ipa, e.romanization, e.pos].filter(Boolean).join(' · '))}</div>
@@ -911,7 +998,7 @@ function reveal(item, d, rating, extra, metrics) {
         <span>
           <span class="label">App chấm</span>
           <span class="value">${RATING[rating]}</span>
-          <span class="muted"> · ${esc(ratingReason(metrics, rating))}</span>
+          <span class="muted"> · ${esc(ratingReason(metrics, rating))}${item._scored ? '' : ' · ôn thêm, không đổi lịch ôn'}</span>
         </span>
         <button class="primary" id="next">Tiếp tục</button>
       </div>
@@ -929,28 +1016,42 @@ function reveal(item, d, rating, extra, metrics) {
   app.querySelectorAll('.rate button').forEach(b => b.onclick = once(() => commit(item, d, +b.dataset.g, token)));
 }
 
+function progressPct(extra) {
+  if (!session.total) return 100;
+  return Math.min(100, ((session.done + extra) / session.total) * 100);
+}
+
 async function commit(item, d, g, token) {
   // Chặn chấm trùng: dù bấm dồn hay phím lặp, một lần hiện thẻ chỉ tính điểm một lần.
   if (token !== undefined && item._done === token) return;
   item._done = token;
+  const scored = item._scored !== false;
   const stageBefore = item.card.stage ?? 0;
-  const updated = schedule(item.card, g);
-  if (item.card.state === 'new') dailyStat('new_' + d.lang, 1);
-  dailyStat('reviews', 1);
-  persistCard(updated);
   enqueue('appendLog', {
-    ts: nowISO(), word_id: updated.word_id,
+    ts: nowISO(), word_id: item.card.word_id,
     exercise: ['choice', 'cloze', 'recall', 'produce'][stageBefore],
-    rating: g, correct: g > 1 ? 'true' : 'false', answer: '', ms: item._ms ?? ''
+    rating: g, correct: g > 1 ? 'true' : 'false', answer: '', ms: item._ms ?? '',
+    mode: scored ? 'scored' : 'practice'
   });
-  item.card = updated;
-  session.done++;
-  session.queue.shift();
-  // Thẻ chưa qua bước học ngắn thì quay lại hàng đợi, không hiện lại ngay lập tức.
-  if (updated.state === 'learning' || updated.state === 'relearning') {
-    session.queue.splice(Math.min(session.queue.length, 2), 0, item);
-    session.total++;
+
+  if (scored) {
+    const updated = schedule(item.card, g);
+    if (item.card.state === 'new') dailyStat('new_' + d.lang, 1);
+    dailyStat('reviews', 1);
+    persistCard(updated);
+    item.card = updated;
+    session.done++;
+    session.recent.push(item.raw.word_id);
+    // Thẻ chưa qua bước học ngắn quay lại hàng đợi; sẽ hiện lại khi tới giờ của bước đó.
+    if (isLearning(updated)) { session.queue.push(item); session.total++; }
+  } else {
+    // Ôn thêm: KHÔNG gọi schedule, KHÔNG ghi Progress → lịch ôn của từ giữ nguyên.
+    dailyStat('practice', 1);
+    session.practiced++;
+    session.recent.push(item.raw.word_id);
+    if (g === 1) session.practice.splice(Math.min(3, session.practice.length), 0, item); // quên thì gặp lại sau vài thẻ
   }
+  session.current = null;
   flush();          // gửi nền, không chờ
   nextCard();
 }
@@ -979,7 +1080,7 @@ document.addEventListener('keydown', e => {
   const tag = e.target && e.target.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'BUTTON' || tag === 'A') return;
   if (e.key === 'Enter') {
-    if (kbdClick($('#next'))) e.preventDefault();
+    if (kbdClick($('#next') || $('#more'))) e.preventDefault();
   } else if (/^[1-4]$/.test(e.key)) {
     const rate = $(`.rate button[data-g="${e.key}"]`);
     if (rate) { if (kbdClick(rate)) e.preventDefault(); return; }
@@ -996,12 +1097,13 @@ const WD = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
 
 // Gom số liệu lịch sử từ ReviewLog (server) cho các ngôn ngữ đang chọn.
 function historyDay(key, langs) {
-  const out = { n: 0, ok: 0, r: [0, 0, 0, 0], ms: 0, msN: 0 };
+  const out = { n: 0, ok: 0, r: [0, 0, 0, 0], ms: 0, msN: 0, p: 0, pok: 0 };
   const day = DB.review && DB.review.days && DB.review.days[key];
   if (!day) return out;
   langs.forEach(l => {
     const o = day[l]; if (!o) return;
     out.n += o.n; out.ok += o.ok; out.ms += o.ms; out.msN += o.msN;
+    out.p += o.p || 0; out.pok += o.pok || 0;
     o.r.forEach((v, i) => out.r[i] += v);
   });
   return out;
@@ -1040,27 +1142,30 @@ function computeStats(lang) {
   const local = JSON.parse(localStorage.getItem(LS.stats) || '{}');
   const hist = Array.from({ length: 14 }, (_, i) => {
     const k = dayKey(now - (13 - i) * 864e5);
-    const n = hasHistory ? historyDay(k, langs).n : ((local[k] && local[k].reviews) || 0);
+    const o = hasHistory ? historyDay(k, langs) : { n: (local[k] && local[k].reviews) || 0, p: (local[k] && local[k].practice) || 0 };
     const [, m, d] = k.split('-');
-    return { key: k, n, label: `${+d}/${+m}`, hl: k === today };
+    return { key: k, n: o.n + o.p, p: o.p, label: `${+d}/${+m}`, hl: k === today };
   });
 
   // 30 ngày: tỷ lệ nhớ, phân bố mức đánh giá, thời gian trả lời
-  const agg = { n: 0, ok: 0, r: [0, 0, 0, 0], ms: 0, msN: 0 };
+  const agg = { n: 0, ok: 0, r: [0, 0, 0, 0], ms: 0, msN: 0, p: 0, pok: 0 };
   for (let i = 0; i < 30; i++) {
     const o = historyDay(dayKey(now - i * 864e5), langs);
     agg.n += o.n; agg.ok += o.ok; agg.ms += o.ms; agg.msN += o.msN;
+    agg.p += o.p; agg.pok += o.pok;
     o.r.forEach((v, j) => agg.r[j] += v);
   }
 
   // Chuỗi ngày học (tính trên cả hai ngôn ngữ): nếu hôm nay chưa học thì tính từ hôm qua
   let streak = 0;
   if (hasHistory) {
-    let i = historyDay(today, ['en', 'ko']).n > 0 ? 0 : 1;
-    while (historyDay(dayKey(now - i * 864e5), ['en', 'ko']).n > 0) { streak++; i++; }
+    const any = k => { const o = historyDay(k, ['en', 'ko']); return o.n + o.p > 0; };
+    let i = any(today) ? 0 : 1;
+    while (any(dayKey(now - i * 864e5))) { streak++; i++; }
   } else {
-    let i = ((local[today] && local[today].reviews) || 0) > 0 ? 0 : 1;
-    while (((local[dayKey(now - i * 864e5)] || {}).reviews || 0) > 0) { streak++; i++; }
+    const any = k => ((local[k] || {}).reviews || 0) + ((local[k] || {}).practice || 0) > 0;
+    let i = any(today) ? 0 : 1;
+    while (any(dayKey(now - i * 864e5))) { streak++; i++; }
   }
 
   // Từ hay quên nhất
@@ -1069,7 +1174,7 @@ function computeStats(lang) {
 
   return {
     total: cards.length, nw, learning, young, mature, avgS, forecast, hist, agg, streak, lapsy,
-    todayN: hist[hist.length - 1].n, hasHistory
+    todayN: hist[hist.length - 1].n, todayP: hist[hist.length - 1].p, hasHistory
   };
 }
 
@@ -1077,7 +1182,7 @@ function barChart(items) {
   const max = Math.max(1, ...items.map(i => i.n));
   return `<div class="bars">${items.map(i => `
     <div class="col"><span class="v">${i.n || ''}</span>
-    <i class="${i.hl ? 'hl' : ''}" style="height:${i.n ? Math.max(6, (i.n / max) * 84) : 3}px"></i>
+    <i class="${i.hl ? 'hl' : ''}" style="height:${i.n ? Math.max(6, (i.n / max) * 84) : 3}px">${i.p ? `<em style="height:${(i.p / i.n) * 100}%"></em>` : ''}</i>
     <span class="l">${i.label}</span></div>`).join('')}</div>`;
 }
 
@@ -1102,7 +1207,7 @@ function statsHTML(lang, note) {
     ${!s.hasHistory ? `<p class="pill warn" style="display:inline-block;margin:0 0 12px">Chưa có lịch sử từ sheet. Dán Code_v3.gs và deploy bản mới để xem đủ số liệu; hiện chỉ có số lượt ôn trên máy này.</p>` : ''}
 
     <div class="tiles">
-      <div class="tile"><div class="v">${s.todayN}</div><div class="t">Lượt ôn hôm nay</div></div>
+      <div class="tile"><div class="v">${s.todayN}</div><div class="t">Lượt ôn hôm nay</div>${s.todayP ? `<div class="s">gồm ${s.todayP} lượt ôn thêm</div>` : ''}</div>
       <div class="tile"><div class="v">${s.streak}</div><div class="t">Chuỗi ngày học</div><div class="s">ngày liên tiếp</div></div>
       <div class="tile"><div class="v">${pct === null ? '—' : pct + '%'}</div><div class="t">Nhớ đúng, 30 ngày</div><div class="s">mục tiêu ${target}%</div></div>
       <div class="tile"><div class="v">${s.total}</div><div class="t">Từ đang học</div><div class="s">${s.mature} từ nhớ vững</div></div>
@@ -1111,7 +1216,7 @@ function statsHTML(lang, note) {
     <div class="card">
       <h3>14 ngày gần đây</h3>
       ${barChart(s.hist)}
-      <p class="muted">Số lượt ôn mỗi ngày${s.hasHistory ? '' : ' (chỉ trên máy này)'}</p>
+      <p class="muted"><span class="dot" style="background:#0a84ff"></span>Ôn đúng hạn <span class="dot" style="background:#a78bfa;margin-left:12px"></span>Ôn thêm${s.hasHistory ? '' : ' · chỉ trên máy này'}</p>
     </div>
 
     <div class="card">
@@ -1120,7 +1225,8 @@ function statsHTML(lang, note) {
         <div class="hrow"><span>${n}</span>
           <span class="track"><i style="width:${(s.agg.r[i] / rMax) * 100}%;background:${colors[i]}"></i></span>
           <span class="n">${s.agg.r[i]}</span></div>`).join('') : '<p class="muted">Chưa có dữ liệu.</p>'}
-      ${avgSec ? `<p class="muted">Thời gian trả lời trung bình ${avgSec} giây · Tỷ lệ nhớ đúng tính cả thẻ mới nên thường thấp hơn mục tiêu một chút.</p>` : ''}
+      ${avgSec ? `<p class="muted">Thời gian trả lời trung bình ${avgSec} giây · Chỉ tính lượt ôn đúng hạn; tỷ lệ nhớ đúng gồm cả thẻ mới nên thường thấp hơn mục tiêu một chút.</p>` : ''}
+      ${s.agg.p ? `<p class="muted">Ôn thêm 30 ngày: ${s.agg.p} lượt, đúng ${Math.round((s.agg.pok / s.agg.p) * 100)}%. Phần này không tính vào lịch ôn.</p>` : ''}
     </div>
 
     <div class="card">
@@ -1176,10 +1282,13 @@ async function viewStats() {
 }
 
 function startCustom(lang, ids) {
+  const now = Date.now();
   const items = ids.map(id => DB.raw.find(r => r.word_id === id)).filter(Boolean)
     .map(raw => ({ raw, card: cardOf(raw) }));
   if (!items.length) { viewHome(); return; }
-  session = { lang, queue: items, done: 0, total: items.length, backlog: false, newCount: 0 };
+  const isDue = x => new Date(x.card.due).getTime() <= now;
+  session = newSession(lang, items.filter(isDue), { custom: true });
+  session.practice = items.filter(x => !isDue(x)).map(x => ({ ...x, practice: true }));
   nextCard();
 }
 

@@ -148,10 +148,12 @@ input::placeholder{color:rgba(28,28,46,.45)}
 .rate button b{display:block;font-size:10px;font-weight:500;color:rgba(28,28,46,.45)}
 .rate button.primary b{color:rgba(10,91,184,.6)}
 .auto{
-  display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;
+  display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:nowrap;
   margin-top:18px;padding:12px 14px;border-radius:16px;
   background:rgba(255,255,255,.45);border:1px solid rgba(255,255,255,.8);
 }
+.auto>span{flex:1 1 auto;min-width:0;overflow-wrap:break-word}   /* chữ tự xuống dòng */
+.auto>button{flex:0 0 auto;margin-left:auto;white-space:nowrap}  /* nút luôn nằm bên phải */
 .auto .label{font-size:10.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:rgba(28,28,46,.45)}
 .auto .value{font-size:1rem;font-weight:800}
 
@@ -182,6 +184,23 @@ td:last-child{text-align:right;font-family:ui-monospace,SFMono-Regular,Menlo,mon
   box-shadow:0 12px 36px rgba(15,23,42,.18), inset 0 1.5px 1.5px rgba(255,255,255,1);
 }
 .hide{display:none}
+
+/* --- truyện ngắn --- */
+.story h2{margin-bottom:6px}
+.story .body p{font-size:1.06rem;font-weight:500;line-height:1.8;margin:0 0 14px;color:var(--ink)}
+.story .tr p{font-size:.95rem;line-height:1.7;color:rgba(28,28,46,.75);margin:0 0 10px}
+button.tw{
+  all:unset;cursor:pointer;font-weight:800;color:var(--ink);border-radius:5px;padding:0 3px;
+  background:rgba(245,158,11,.25);box-shadow:inset 0 -2px 0 rgba(245,158,11,.55);transition:background .15s ease;
+}
+button.tw:hover,button.tw.on{background:rgba(10,132,255,.18);box-shadow:inset 0 -2px 0 rgba(10,132,255,.55)}
+button.tw:focus-visible{outline:2px solid #007aff;outline-offset:1px}
+.gloss{
+  margin-top:6px;padding:12px 14px;border-radius:16px;min-height:48px;font-size:14px;font-weight:500;
+  background:rgba(255,255,255,.5);border:1px solid rgba(255,255,255,.8);color:rgba(28,28,46,.8)
+}
+.gloss b{font-weight:800;color:var(--ink)}
+.q{margin:16px 0 4px;font-weight:700}
 
 /* --- phím tắt --- */
 .k,.kbdhint{display:none}
@@ -237,7 +256,7 @@ td:last-child{text-align:right;font-family:ui-monospace,SFMono-Regular,Menlo,mon
 <div id="app"></div>
 <script>
 /* ============================ CẤU HÌNH & TIỆN ÍCH ============================ */
-const APP_VERSION = '2026.10.05-1';   // tăng mỗi lần cập nhật để app tự nhận bản mới
+const APP_VERSION = '2026.10.05-3';   // tăng mỗi lần cập nhật để app tự nhận bản mới
 const LS = {
   cfg: 'vocab.cfg', queue: 'vocab.queue', stats: 'vocab.dailyStats'
 };
@@ -727,12 +746,14 @@ function viewHome() {
         </span>
         <span class="num ${d.due + Math.min(d.fresh, +DB.settings['daily_new_' + d.l] || 0) ? '' : 'zero'}">${d.due}</span>
       </button>`).join('') || '<div class="card">Chưa có từ nào trong sheet. Lưu vài từ rồi quay lại.</div>'}
+    ${storyHomeCard()}
     <p class="muted" id="syncState" style="margin-top:20px"></p>`);
   updateSyncBadge();
   atHome = true;
   app.querySelectorAll('.deck').forEach(b => b.onclick = once(() => startSession(b.dataset.lang)));
   $('#settings').onclick = once(viewSettings);
   $('#stats').onclick = once(() => { viewStats(); }); // không giữ khóa trong lúc tải dữ liệu
+  app.querySelectorAll('[data-story]').forEach(b => b.onclick = once(() => { startStory(b.dataset.story); }));
 }
 
 function viewSettings() {
@@ -869,6 +890,8 @@ function endScreen() {
   flush(true);
   session.current = null;
   const canMore = !session.custom && buildPracticePool(session.lang).length > 0;
+  const studied = [...new Set(session.recent)];
+  const canStory = cfg.geminiKey && studied.length >= 3;
   const parts = [];
   if (session.done) parts.push(`${session.done} thẻ đến hạn`);
   if (session.practiced) parts.push(`${session.practiced} lượt ôn thêm`);
@@ -879,6 +902,7 @@ function endScreen() {
       <p class="muted" id="syncState"></p>
       <div class="row" style="margin-top:14px">
         ${canMore ? '<button class="primary" id="more">Ôn thêm</button>' : ''}
+        ${canStory ? '<button id="story">Đọc truyện với các từ vừa ôn</button>' : ''}
         <button class="${canMore ? '' : 'primary'}" id="home">Về trang chủ</button>
       </div>
       ${canMore ? '<p class="muted kbdhint">Enter để ôn thêm</p>' : ''}
@@ -887,6 +911,8 @@ function endScreen() {
   $('#home').onclick = once(viewHome);
   const more = $('#more');
   if (more) more.onclick = once(() => { session.practiceMode = true; nextCard(); });
+  const st = $('#story');
+  if (st) st.onclick = once(() => { startStory(session.lang, studied); });
 }
 
 function cardData(item) {
@@ -1294,6 +1320,207 @@ function startCustom(lang, ids) {
   session = newSession(lang, items.filter(isDue), { custom: true });
   session.practice = items.filter(x => !isDue(x)).map(x => ({ ...x, practice: true }));
   nextCard();
+}
+
+/* ============================ ÔN BẰNG TRUYỆN NGẮN ============================ */
+// AI viết một truyện ngắn tự nhiên dùng các từ bạn vừa học, kèm bản dịch và 3 câu hỏi đọc hiểu.
+// Đây là ôn thêm: chỉ ghi log (mode = practice), không đổi lịch ôn của từ.
+let story = null;
+const LANG_NAME = { en: 'tiếng Anh', ko: 'tiếng Hàn' };
+
+function learnedCards(lang) {
+  return DB.raw.filter(r => (r['Ngôn ngữ'] || 'en') === lang)
+    .map(r => ({ raw: r, card: cardOf(r) }))
+    .filter(x => x.card.suspended !== 'true' && x.card.state !== 'new');
+}
+
+function storyHomeCard() {
+  const langs = ['en', 'ko'].filter(l => learnedCards(l).length >= 3);
+  return `<div class="card">
+    <h3>Ôn bằng truyện ngắn</h3>
+    <p class="muted">AI viết một truyện ngắn, tự nhiên như người bản xứ, dùng các từ bạn vừa học. Có bản dịch và 3 câu hỏi đọc hiểu. Không tính vào lịch ôn.</p>
+    ${langs.length
+      ? `<div class="row" style="margin-top:12px">${langs.map(l => `<button data-story="${l}">Truyện ${LANG_NAME[l]}</button>`).join('')}</div>`
+      : '<p class="muted">Học ít nhất 3 từ để mở phần này.</p>'}
+  </div>`;
+}
+
+// Ưu tiên từ vừa ôn trong phiên; không có thì lấy từ ôn trong 48 giờ qua; thiếu thì bù bằng từ sắp quên nhất.
+function pickStoryWords(lang, preferIds = []) {
+  const all = learnedCards(lang);
+  const max = lang === 'ko' ? 6 : 8;
+  const byId = Object.fromEntries(all.map(x => [x.raw.word_id, x]));
+  let picked = preferIds.map(id => byId[id]).filter(Boolean);
+  if (picked.length < 3) {
+    const since = Date.now() - 48 * 3600e3;
+    picked = all.filter(x => x.card.last_review && new Date(x.card.last_review).getTime() >= since)
+      .sort((a, b) => new Date(b.card.last_review) - new Date(a.card.last_review));
+  }
+  if (picked.length < 5) {
+    const have = new Set(picked.map(x => x.raw.word_id));
+    const rest = all.filter(x => !have.has(x.raw.word_id)).map(x => {
+      const el = x.card.last_review ? days(new Date(), x.card.last_review) : 0;
+      return { ...x, R: x.card.S > 0 ? retrievability(el, x.card.S) : 0 };
+    }).sort((a, b) => a.R - b.R);
+    picked = picked.concat(rest.slice(0, 5 - picked.length));
+  }
+  return shuffle(picked.slice(0, max));
+}
+
+const STORY_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    title: { type: 'STRING' },
+    story: { type: 'STRING' },
+    translation_vi: { type: 'STRING' },
+    words: { type: 'ARRAY', items: { type: 'OBJECT', properties: {
+      i: { type: 'INTEGER' }, form: { type: 'STRING' }, meaning_vi: { type: 'STRING' } }, required: ['i', 'form', 'meaning_vi'] } },
+    questions: { type: 'ARRAY', items: { type: 'OBJECT', properties: {
+      q: { type: 'STRING' }, options: { type: 'ARRAY', items: { type: 'STRING' } },
+      answer: { type: 'INTEGER' }, explain_vi: { type: 'STRING' } }, required: ['q', 'options', 'answer', 'explain_vi'] } }
+  },
+  required: ['title', 'story', 'translation_vi', 'words', 'questions']
+};
+
+function storyPrompt(lang, items) {
+  const list = items.map((x, i) => {
+    const e = DB.enrichment[x.raw.word_id] || {};
+    const meaning = e.meaning_fixed || x.raw['Nghĩa tiếng Việt'] || '';
+    const ctx = (x.raw['Câu / Ngữ cảnh'] || '').slice(0, 220);
+    return `${i}. "${x.raw['Từ vựng']}" — nghĩa: ${meaning}${ctx ? ` — ngữ cảnh gốc: "${ctx}"` : ''}`;
+  }).join('\n');
+  const level = lang === 'ko'
+    ? 'trình độ sơ cấp đến trung cấp thấp (TOPIK 2–3), câu ngắn, dùng đuôi lịch sự 해요체, 80–130 âm tiết mỗi đoạn, tổng 3–4 đoạn ngắn'
+    : 'trình độ B1, câu ngắn và rõ, giọng văn đời thường như người bản xứ kể chuyện, 140–200 từ, 3–4 đoạn';
+  return `Bạn viết truyện ngắn giúp một người Việt ôn từ vựng ${LANG_NAME[lang]}.
+
+Các từ cần dùng (số thứ tự ở đầu là chỉ số i):
+${list}
+
+Yêu cầu:
+- Viết MỘT câu chuyện liền mạch bằng ${LANG_NAME[lang]}, ${level}. Không dùng từ ngữ hoa mỹ, hiếm gặp hay cấu trúc phức tạp ngoài các từ cần ôn.
+- Dùng MỖI từ trong danh sách đúng một lần, với ĐÚNG nghĩa như trong ngữ cảnh gốc. Được chia/biến đổi hình thái cho đúng ngữ pháp (số nhiều, thì, đuôi câu...).
+- Chọn bối cảnh đời thường phù hợp với nghĩa của các từ (ví dụ thời trang, âm nhạc, gia đình, công việc...). Mỗi từ phải xuất hiện ở chỗ người bản xứ thật sự sẽ dùng nó, không gượng ép.
+- Trong "story", đánh dấu mỗi từ cần ôn theo dạng [[dạng xuất hiện trong câu|i]], ví dụ [[ensembles|2]]. Không đánh dấu từ nào khác. Ngắt đoạn bằng một dòng trống.
+- "translation_vi": bản dịch tiếng Việt tự nhiên của cả truyện, giữ nguyên cách ngắt đoạn, không có dấu [[ ]].
+- "words": mỗi từ một mục { i, form: dạng xuất hiện trong truyện, meaning_vi: nghĩa ngắn gọn trong câu đó }.
+- "questions": đúng 3 câu hỏi đọc hiểu bằng ${LANG_NAME[lang]} đơn giản, mỗi câu 4 lựa chọn ngắn, "answer" là chỉ số (0–3) của đáp án đúng, "explain_vi" giải thích ngắn bằng tiếng Việt. Ít nhất 2 câu hỏi phải cần hiểu nghĩa của từ cần ôn mới trả lời được.
+- "title": tiêu đề ngắn bằng ${LANG_NAME[lang]}.`;
+}
+
+async function startStory(lang, preferIds = []) {
+  if (!cfg.geminiKey) { toast('Cần Gemini API key: vào Cài đặt → Đổi kết nối.', 3500); return; }
+  const items = pickStoryWords(lang, preferIds);
+  if (items.length < 3) { toast('Cần ít nhất 3 từ đã học để viết truyện.'); return; }
+  const token = {};
+  story = { token, lang, items, data: null, looked: new Set(), answered: {}, showTr: false };
+  render(`<div class="bar"><h1>Truyện ngắn</h1><button class="ghost" id="back">Xong</button></div>
+    <div class="card"><p class="muted">Đang viết truyện với ${items.length} từ: ${items.map(x => esc(x.raw['Từ vựng'])).join(', ')}…</p></div>`);
+  $('#back').onclick = once(() => { story = null; viewHome(); });
+  try {
+    const { data } = await callGemini({ feature: 'story', prompt: storyPrompt(lang, items), schema: STORY_SCHEMA });
+    if (!story || story.token !== token) return;          // người dùng đã rời màn hình
+    story.data = data;
+    drawStory();
+  } catch (e) {
+    if (!story || story.token !== token) return;
+    render(`<div class="bar"><h1>Truyện ngắn</h1><button class="ghost" id="back">Xong</button></div>
+      <div class="card"><p class="verdict no">Không viết được truyện: ${esc(e.message)}</p>
+      <div class="row"><button class="primary" id="retry">Thử lại</button></div></div>`);
+    $('#back').onclick = once(() => { story = null; viewHome(); });
+    $('#retry').onclick = once(() => { startStory(lang, preferIds); });
+  }
+}
+
+function storyParagraphs(text, marked) {
+  return String(text || '').split(/\n\s*\n/).map(p => p.trim()).filter(Boolean).map(p => {
+    let html = esc(p);
+    if (marked) html = html.replace(/\[\[([^|\]]+)\|(\d+)\]\]/g, (_, form, i) => `<button class="tw" data-i="${+i}">${form}</button>`)
+                           .replace(/\[\[([^\]]+)\]\]/g, (_, form) => `<button class="tw" data-i="-1">${form}</button>`);
+    return `<p>${html}</p>`;
+  }).join('');
+}
+const plainStory = t => String(t || '').replace(/\[\[([^|\]]+)(\|\d+)?\]\]/g, '$1');
+
+function drawStory() {
+  const s = story, d = s.data;
+  const qs = (d.questions || []).slice(0, 3);
+  render(`
+    <div class="bar"><h1>Truyện ngắn</h1><button class="ghost" id="back">Xong</button></div>
+    <div class="card story">
+      <h2>${esc(d.title)}</h2>
+      <p class="muted">Chạm vào từ được tô màu để xem nghĩa. Truyện này không tính vào lịch ôn.</p>
+      <div class="body" style="margin-top:14px">${storyParagraphs(d.story, true)}</div>
+      <div class="gloss" id="gloss">Chạm vào một từ được tô màu để xem nghĩa.</div>
+      <div class="row" style="margin-top:14px">
+        <button id="listen">🔊 Nghe</button>
+        <button id="tr">${s.showTr ? 'Ẩn bản dịch' : 'Xem bản dịch'}</button>
+        <button id="again">Truyện khác</button>
+      </div>
+      <div class="tr ${s.showTr ? '' : 'hide'}" id="trBox" style="margin-top:14px">${storyParagraphs(d.translation_vi, false)}</div>
+    </div>
+    <div class="card">
+      <h3>Đọc hiểu</h3>
+      ${qs.map((q, qi) => `
+        <p class="q">${qi + 1}. ${esc(q.q)}</p>
+        ${(q.options || []).map((o, oi) => {
+          const a = s.answered[qi];
+          const cls = a === undefined ? '' : oi === q.answer ? 'right' : (oi === a ? 'wrong' : '');
+          return `<button class="choice ${cls}" data-q="${qi}" data-o="${oi}">${esc(o)}</button>`;
+        }).join('')}
+        ${s.answered[qi] !== undefined ? `<p class="verdict ${s.answered[qi] === q.answer ? 'ok' : 'no'}">${s.answered[qi] === q.answer ? 'Đúng.' : 'Chưa đúng.'} <span class="muted">${esc(q.explain_vi)}</span></p>` : ''}
+      `).join('')}
+      <div class="row" style="margin-top:16px"><button class="primary" id="done">Xong, về trang chủ</button></div>
+    </div>`);
+
+  const wordOf = i => {
+    const w = (d.words || []).find(x => x.i === i);
+    const item = s.items[i];
+    return { w, item };
+  };
+  app.querySelectorAll('button.tw').forEach(b => b.onclick = () => {
+    app.querySelectorAll('button.tw.on').forEach(x => x.classList.remove('on'));
+    b.classList.add('on');
+    const i = +b.dataset.i;
+    const { w, item } = wordOf(i);
+    if (item) s.looked.add(i);
+    const base = item ? item.raw['Từ vựng'] : b.textContent;
+    const meaning = (w && w.meaning_vi) || (item && ((DB.enrichment[item.raw.word_id] || {}).meaning_fixed || item.raw['Nghĩa tiếng Việt'])) || '';
+    $('#gloss').innerHTML = `<b>${esc(b.textContent)}</b>${base && norm(base) !== norm(b.textContent) ? ` (từ gốc: ${esc(base)})` : ''} — ${esc(meaning)}`;
+    speak(b.textContent, s.lang);
+  });
+  $('#listen').onclick = () => {
+    if (window.speechSynthesis && speechSynthesis.speaking) { speechSynthesis.cancel(); return; }
+    speak(plainStory(d.story), s.lang);
+  };
+  $('#tr').onclick = () => { s.showTr = !s.showTr; $('#trBox').classList.toggle('hide', !s.showTr); $('#tr').textContent = s.showTr ? 'Ẩn bản dịch' : 'Xem bản dịch'; };
+  $('#again').onclick = once(() => { finishStory(); startStory(s.lang, s.items.map(x => x.raw.word_id)); });
+  app.querySelectorAll('.choice[data-q]').forEach(b => b.onclick = () => {
+    const qi = +b.dataset.q;
+    if (s.answered[qi] !== undefined) return;
+    s.answered[qi] = +b.dataset.o;
+    const y = window.scrollY; drawStory(); window.scrollTo(0, y);
+  });
+  $('#back').onclick = once(() => { finishStory(); viewHome(); });
+  $('#done').onclick = once(() => { finishStory(); viewHome(); });
+}
+
+// Ghi nhận đã gặp từ trong truyện: phải tra nghĩa → "Khó", không tra → "Được". Chỉ là log ôn thêm.
+function finishStory() {
+  const s = story;
+  story = null;
+  if (window.speechSynthesis) speechSynthesis.cancel();
+  if (!s || !s.data) return;
+  const t = Date.now();
+  s.items.forEach((x, i) => {
+    const g = s.looked.has(i) ? 2 : 3;
+    enqueue('appendLog', {
+      ts: new Date(t + i).toISOString(), word_id: x.raw.word_id, exercise: 'story',
+      rating: g, correct: 'true', answer: '', ms: '', mode: 'practice'
+    });
+  });
+  dailyStat('practice', s.items.length);
+  flush(true);
 }
 
 /* ============================ TỰ CẬP NHẬT ============================ */

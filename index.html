@@ -342,45 +342,96 @@ function schedule(card, g) {
 
 /* ============================ ĐỒNG BỘ VỚI GOOGLE SHEET ============================ */
 function queueRead() { try { return JSON.parse(localStorage.getItem(LS.queue) || '[]'); } catch { return []; } }
+function queueWrite(q) { localStorage.setItem(LS.queue, JSON.stringify(q)); }
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+const upsertKey = x => x.action === 'saveSettings' ? x.row.key : x.row.word_id;
+
 function enqueue(action, row) {
-  const q = queueRead(); q.push({ action, row });
-  localStorage.setItem(LS.queue, JSON.stringify(q));
-}
-let flushing = false;
-async function flush(force = false) {
-  if (flushing) return;
-  const q = queueRead();
-  if (!q.length || (!force && q.length < 5)) return;
-  flushing = true;
-  const groups = {};
-  q.forEach(x => (groups[x.action] ||= []).push(x.row));
-  try {
-    for (const [action, rows] of Object.entries(groups)) {
-      await fetch(cfg.apiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ token: cfg.token, action, rows })
-      });
-    }
-    localStorage.setItem(LS.queue, JSON.stringify(queueRead().slice(q.length)));
-  } catch (e) {
-    console.warn('Chưa gửi được, giữ lại hàng đợi để thử lại', e);
-  } finally {
-    flushing = false;
-    updateSyncBadge();
+  let q = queueRead();
+  // Lệnh cập nhật (upsert) chỉ cần bản mới nhất của mỗi từ: gộp để hàng đợi không phình ra.
+  if (action.startsWith('upsert') || action === 'saveSettings') {
+    const k = upsertKey({ action, row });
+    q = q.filter(x => !(x.action === action && upsertKey(x) === k));
   }
+  q.push({ id: uid(), action, row, tries: 0 });
+  queueWrite(q);
+}
+// Hàng đợi cũ (bản trước) chưa có id: gán id một lần khi khởi động.
+function migrateQueue() {
+  const q = queueRead();
+  if (q.some(x => !x.id)) queueWrite(q.map(x => ({ id: x.id || uid(), tries: x.tries || 0, ...x })));
+}
+
+const DEAD = 'vocab.dead';
+const deadCount = () => { try { return JSON.parse(localStorage.getItem(DEAD) || '[]').length; } catch { return 0; } }
+
+// Gửi MỘT nhóm lệnh. Chỉ coi là xong khi server trả { ok: true }.
+// Gửi lại thì an toàn: server bỏ qua dòng đã có (ReviewLog/ApiUsage) và không cho bản cũ ghi đè bản mới.
+async function sendGroup(action, rows) {
+  try {
+    const res = await fetch(cfg.apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ token: cfg.token, action, rows })
+    });
+    const out = await res.json();
+    return !!(out && out.ok === true);
+  } catch { return false; }
+}
+
+let flushing = false, failCount = 0, nextTry = 0;
+async function flush(force = false) {
+  if (flushing || Date.now() < nextTry) return;
+  if (!queueRead().length || (!force && queueRead().length < 5)) return;
+  const run = async () => {
+    flushing = true;
+    try {
+      const batch = queueRead();
+      const groups = {};
+      batch.forEach(x => (groups[x.action] ||= []).push(x));
+      let allOk = true;
+      for (const [action, items] of Object.entries(groups)) {
+        for (let i = 0; i < items.length; i += 100) {            // chia lô tối đa 100 dòng
+          const part = items.slice(i, i + 100), ids = new Set(part.map(x => x.id));
+          if (await sendGroup(action, part.map(x => x.row))) {
+            queueWrite(queueRead().filter(x => !ids.has(x.id)));  // xóa đúng những dòng đã gửi xong
+          } else {
+            allOk = false;
+            // Quá 8 lần vẫn lỗi thì tách ra khỏi hàng đợi, để không gửi lặp mãi.
+            const q = queueRead(), dead = [];
+            q.forEach(x => { if (ids.has(x.id)) x.tries = (x.tries || 0) + 1; });
+            const live = q.filter(x => { const d = ids.has(x.id) && x.tries >= 8; if (d) dead.push(x); return !d; });
+            queueWrite(live);
+            if (dead.length) localStorage.setItem(DEAD, JSON.stringify([...JSON.parse(localStorage.getItem(DEAD) || '[]'), ...dead].slice(-200)));
+            break;                                               // nhóm này lỗi thì thôi, thử nhóm khác
+          }
+        }
+      }
+      if (allOk) failCount = 0;
+      else { failCount++; nextTry = Date.now() + Math.min(300000, 8000 * 2 ** failCount); } // lùi dần: 16s, 32s… tối đa 5 phút
+    } finally {
+      flushing = false;
+      updateSyncBadge();
+    }
+  };
+  // Nhiều tab cùng mở: chỉ một tab được gửi tại một thời điểm.
+  if (navigator.locks && navigator.locks.request) {
+    await navigator.locks.request('vocab-flush', { ifAvailable: true }, async lock => { if (lock) await run(); });
+  } else await run();
 }
 
 // Gửi nền đều đặn, không chặn thao tác học.
 setInterval(() => { if (navigator.onLine !== false) flush(true); }, 8000);
-window.addEventListener('online', () => flush(true));
+window.addEventListener('online', () => { nextTry = 0; flush(true); });
 
 // Hiện số thay đổi còn chờ, nếu màn hình đang có chỗ để hiện.
 function updateSyncBadge() {
   const el = document.getElementById('syncState');
   if (!el) return;
   const n = queueRead().length;
-  el.textContent = n ? n + ' thay đổi đang gửi lên sheet…' : 'Đã đồng bộ xong.';
+  const dead = deadCount();
+  el.textContent = (n ? n + ' thay đổi đang gửi lên sheet…' : 'Đã đồng bộ xong.')
+    + (dead ? ` ${dead} bản ghi lỗi nhiều lần đã được tách riêng.` : '');
 }
 
 async function loadAll() {
@@ -759,6 +810,7 @@ function cardData(item) {
 }
 
 function showCard(item) {
+  item._token = (item._token || 0) + 1;   // mỗi lần hiện thẻ có một mã riêng; commit chỉ nhận mỗi mã một lần
   const d = cardData(item);
   const stage = item.card.stage ?? 0;
   const started = Date.now();
@@ -837,6 +889,7 @@ function showCard(item) {
 
 function reveal(item, d, rating, extra, metrics) {
   item._ms = metrics ? Math.round(metrics.ms) : '';
+  const token = item._token;
   const e = d.e, colls = safeList(e.collocations), exs = safeList(e.examples);
   const differs = e.meaning_fixed && d.raw['Nghĩa tiếng Việt'] &&
     norm(e.meaning_fixed) !== norm(d.raw['Nghĩa tiếng Việt']);
@@ -870,13 +923,16 @@ function reveal(item, d, rating, extra, metrics) {
     </div>`);
   // Màn hình đáp án vừa thay chỗ nút vừa bấm, nên chặn lâu hơn một chút.
   arm(700);
-  $('#next').onclick = once(() => commit(item, d, rating));
+  $('#next').onclick = once(() => commit(item, d, rating, token));
   $('#say').onclick = () => speak(d.word, d.lang);
   if (DB.settings.autoplay !== 'false') speak(d.word, d.lang);
-  app.querySelectorAll('.rate button').forEach(b => b.onclick = once(() => commit(item, d, +b.dataset.g)));
+  app.querySelectorAll('.rate button').forEach(b => b.onclick = once(() => commit(item, d, +b.dataset.g, token)));
 }
 
-async function commit(item, d, g) {
+async function commit(item, d, g, token) {
+  // Chặn chấm trùng: dù bấm dồn hay phím lặp, một lần hiện thẻ chỉ tính điểm một lần.
+  if (token !== undefined && item._done === token) return;
+  item._done = token;
   const stageBefore = item.card.stage ?? 0;
   const updated = schedule(item.card, g);
   if (item.card.state === 'new') dailyStat('new_' + d.lang, 1);
@@ -1129,6 +1185,7 @@ function startCustom(lang, ids) {
 
 /* ============================ KHỞI ĐỘNG ============================ */
 async function boot() {
+  migrateQueue();
   if (!cfg.apiUrl || !cfg.token) return viewSetup();
   render('<div class="card"><p class="muted">Đang tải dữ liệu…</p></div>');
   try {
@@ -1139,18 +1196,17 @@ async function boot() {
     viewSetup('Không tải được dữ liệu: ' + e.message + '. Kiểm tra lại địa chỉ và token, và nhớ deploy bản mới sau khi sửa Code.gs.');
   }
 }
-// Rời trang: gửi nốt bằng sendBeacon để trình duyệt không hủy request giữa chừng.
+// Rời trang: gửi nốt bằng sendBeacon. Không xóa hàng đợi ở đây vì không biết chắc đã tới nơi;
+// lần mở sau gửi lại cũng không sao vì server bỏ qua dòng trùng.
 window.addEventListener('pagehide', () => {
   const q = queueRead();
-  if (!q.length || !navigator.sendBeacon) return;
+  if (!q.length || !navigator.sendBeacon || flushing) return;
   const groups = {};
   q.forEach(x => (groups[x.action] ||= []).push(x.row));
-  let sent = true;
   for (const [action, rows] of Object.entries(groups)) {
     const blob = new Blob([JSON.stringify({ token: cfg.token, action, rows })], { type: 'text/plain;charset=utf-8' });
-    sent = navigator.sendBeacon(cfg.apiUrl, blob) && sent;
+    navigator.sendBeacon(cfg.apiUrl, blob);
   }
-  if (sent) localStorage.setItem(LS.queue, '[]');
 });
 boot();
 </script>

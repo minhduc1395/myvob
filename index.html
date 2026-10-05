@@ -232,6 +232,15 @@ details.more>summary:focus-visible{outline:2px solid #007aff;outline-offset:2px}
 .src{margin:8px 0 0;font-size:12px;color:rgba(28,28,46,.5);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .src a{font-weight:500;font-size:12px}
 
+/* --- chấm nhiều câu cùng lúc / nhật ký --- */
+.diary-r{margin-top:14px;padding-top:12px;border-top:1px solid rgba(255,255,255,.7)}
+.vt{margin-top:10px;border-radius:14px;background:rgba(255,255,255,.45);border:1px solid rgba(255,255,255,.8)}
+.vt-i{padding:10px 12px;border-top:1px solid rgba(255,255,255,.8);font-size:13.5px;line-height:1.55}
+.vt-i:first-child{border-top:0}
+.vt-i p{margin:4px 0 0;color:rgba(28,28,46,.7);font-weight:500}
+.vt-vi{padding:0 6px;border-radius:6px;background:rgba(245,158,11,.18);font-weight:600}
+.vt-i .vt-ex{color:var(--ink);font-style:italic}
+
 /* --- luyện thêm --- */
 .acts{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
 button.act{display:flex;flex-direction:column;align-items:flex-start;gap:4px;text-align:left;padding:14px;border-radius:18px}
@@ -306,7 +315,7 @@ mark.err{background:rgba(244,63,94,.2);color:#881337;border-radius:5px;padding:0
 <div id="app"></div>
 <script>
 /* ============================ CẤU HÌNH & TIỆN ÍCH ============================ */
-const APP_VERSION = '2026.10.05-12';   // tăng mỗi lần cập nhật để app tự nhận bản mới
+const APP_VERSION = '2026.10.05-14';   // tăng mỗi lần cập nhật để app tự nhận bản mới
 const LS = {
   cfg: 'vocab.cfg', queue: 'vocab.queue', stats: 'vocab.dailyStats'
 };
@@ -587,10 +596,31 @@ class GeminiError extends Error {
   constructor(msg, { status = '', code = 0, fallback = true, aborted = false } = {}) { super(msg); this.status = status; this.code = code; this.fallback = fallback; this.aborted = aborted; }
 }
 
-async function callModel(model, { feature, wordId, prompt, schema, signal }) {
+// Giới hạn số request mỗi phút (ai_rpm trong Settings, mặc định 10) để không vượt hạn mức của Google.
+const aiCalls = [];
+const sleep = (ms, signal) => new Promise((res, rej) => {
+  const t = setTimeout(res, ms);
+  if (signal) signal.addEventListener('abort', () => { clearTimeout(t); rej(new GeminiError('Đã hủy.', { fallback: false, aborted: true })); }, { once: true });
+});
+const aiRpm = () => Math.max(1, +DB.settings.ai_rpm || 10);
+async function rpmGate(signal) {
+  for (;;) {
+    if (signal && signal.aborted) throw new GeminiError('Đã hủy.', { fallback: false, aborted: true });
+    const now = Date.now();
+    while (aiCalls.length && now - aiCalls[0] >= 60000) aiCalls.shift();
+    if (aiCalls.length < aiRpm()) { aiCalls.push(now); return; }
+    const wait = 60000 - (now - aiCalls[0]) + 100;
+    if (wait > 1500) toast(`Đang chờ ${Math.ceil(wait / 1000)} giây để không vượt giới hạn ${aiRpm()} request/phút…`, Math.min(wait, 4000));
+    await sleep(wait, signal);
+  }
+}
+
+async function callModel(model, { feature, wordId, prompt, schema, signal, maxTokens }) {
+  await rpmGate(signal);
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${cfg.geminiKey}`;
   const body = { contents: [{ parts: [{ text: prompt }] }] };
   if (schema) body.generationConfig = { responseMimeType: 'application/json', responseSchema: schema };
+  if (maxTokens) body.generationConfig = { ...(body.generationConfig || {}), maxOutputTokens: maxTokens };
   let json;
   try {
     const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
@@ -606,6 +636,8 @@ async function callModel(model, { feature, wordId, prompt, schema, signal }) {
     throw new GeminiError(msg, { status: st, code, fallback: !badKey });
   }
   const usage = logUsage(json, feature, wordId, model);
+  // Kết quả bị cắt vì quá dài: báo để nơi gọi tự chia nhỏ danh sách rồi gửi lại.
+  if (json.candidates?.[0]?.finishReason === 'MAX_TOKENS') throw new GeminiError('Kết quả quá dài, bị cắt giữa chừng.', { status: 'TOO_LONG', fallback: false });
   const text = json.candidates?.[0]?.content?.parts?.map(p => p.text).join('') || '';
   let data = text;
   if (schema) {
@@ -715,132 +747,220 @@ const COMMON_RULES = `- examples: mỗi câu viết dạng "câu ${'${lang}'} (b
 - synonyms: 2–4 từ gần nghĩa, mỗi mục kèm khác biệt ngắn gọn, ví dụ "amusing (nhẹ hơn hilarious)".
 - word_family: các dạng cùng gốc, mỗi dạng viết đúng kiểu 'dạng (n)', 'dạng (v)', 'dạng (adj)' hoặc 'dạng (adv)', cách nhau bằng dấu phẩy, BAO GỒM cả chính từ đang học, mỗi loại từ chỉ một dạng phổ biến nhất. Ví dụ "enthusiasm (n), enthusiastic (adj), enthusiastically (adv)". Nếu không có họ từ rõ ràng thì để trống.`;
 
-function enrichPrompt(raw, langName) {
-  return `Bạn giúp một người Việt học ${langName}.
-Từ/cụm cần học: "${raw['Từ vựng']}"
-Ngữ cảnh người học đã gặp: "${(raw['Câu / Ngữ cảnh'] || '').slice(0, 600)}"
-Nghĩa người học tự ghi: "${raw['Nghĩa tiếng Việt'] || ''}"
+/* ---------- Gom request theo loại việc ----------
+   - Làm giàu / làm mới: gửi TẤT CẢ từ cần xử lý tại thời điểm đó trong một request.
+     Nếu danh sách quá dài so với giới hạn đầu ra của model, app tự chia nhỏ (và tự chia đôi nếu kết quả bị cắt).
+   - Chấm bài: chấm ngay từng câu sau khi bạn trả lời, không bắt chờ. */
+const MAX_PER_REQ = 20;      // trần an toàn cho một request làm giàu/làm mới (~1.000 token đầu ra mỗi từ)
+const REFRESH_DAILY = 50;    // giới hạn số từ được làm mới mỗi ngày (giữ chi phí thấp)
+const langNameOf = raw => raw['Ngôn ngữ'] === 'ko' ? 'tiếng Hàn' : 'tiếng Anh';
+// Chi phí một request gộp được chia đều cho các từ trong đó khi ghi vào tab Enrichment.
+const costShare = (u, n) => {
+  const k = 1 / Math.max(1, n);
+  return { model: u.model, in_tokens: Math.round(u.in_tokens * k), out_tokens: Math.round(u.out_tokens * k),
+           thought_tokens: Math.round(u.thought_tokens * k), cost_usd: round(u.cost_usd * k, 6), cost_vnd: round(u.cost_vnd * k, 2) };
+};
+const itemsSchema = (props, required) => ({ type: 'OBJECT', properties: { items: { type: 'ARRAY', items: {
+  type: 'OBJECT', properties: { i: { type: 'INTEGER' }, ...props }, required: ['i', ...required] } } }, required: ['items'] });
+const ENRICH_BATCH_SCHEMA = itemsSchema(ENRICH_SCHEMA.properties, ENRICH_SCHEMA.required);
+// Ghép kết quả theo chỉ số i; bỏ phần tử có chỉ số lạ hoặc trùng.
+function byIndex(data, n) {
+  const out = new Map();
+  ((data && data.items) || []).forEach(it => { const i = +it.i; if (Number.isInteger(i) && i >= 0 && i < n && !out.has(i)) out.set(i, it); });
+  return out;
+}
+// Chạy fn trên từng phần (tối đa maxPer mục); nếu kết quả bị cắt vì quá dài thì tự chia đôi rồi chạy lại.
+async function inChunks(items, maxPer, fn) {
+  const out = [];
+  for (let i = 0; i < items.length; i += maxPer) out.push(...await splitRun(items.slice(i, i + maxPer), fn));
+  return out;
+}
+async function splitRun(chunk, fn) {
+  try { return await fn(chunk); }
+  catch (e) {
+    if (e && e.status === 'TOO_LONG' && chunk.length > 1) {
+      const h = Math.ceil(chunk.length / 2);
+      return [...await splitRun(chunk.slice(0, h), fn), ...await splitRun(chunk.slice(h), fn)];
+    }
+    throw e;
+  }
+}
+const outBudget = n => Math.min(60000, 1200 * n + 1500);   // số token đầu ra cho phép, đủ rộng cho n từ
 
-Trả JSON:
-- meaning_fixed: nghĩa tiếng Việt ĐÚNG trong ngữ cảnh này, ngắn gọn (sửa nếu nghĩa người học ghi bị sai).
+function enrichBatchPrompt(raws) {
+  return `Bạn giúp một người Việt học ngoại ngữ. Hãy làm giàu dữ liệu cho ${raws.length} từ/cụm dưới đây (số đầu dòng là chỉ số i, mỗi từ ghi rõ ngôn ngữ).
+
+${raws.map((r, i) => `${i}. "${r['Từ vựng']}" (${langNameOf(r)})
+   Ngữ cảnh người học đã gặp: "${(r['Câu / Ngữ cảnh'] || '').slice(0, 500)}"
+   Nghĩa người học tự ghi: "${r['Nghĩa tiếng Việt'] || ''}"`).join('\n')}
+
+Trả JSON { items: [...] }, MỖI từ đúng một phần tử, có "i" là chỉ số ở trên, và các trường:
+- meaning_fixed: nghĩa tiếng Việt ĐÚNG trong ngữ cảnh đó, ngắn gọn (sửa nếu nghĩa người học ghi bị sai).
 - pos: từ loại trong ngữ cảnh (tiếng Việt). ipa: phiên âm IPA (để trống nếu là tiếng Hàn).
 - definition_en: định nghĩa tiếng Anh đơn giản.
 - collocations: 3–5 cụm đi kèm thông dụng, mỗi mục kèm nghĩa tiếng Việt trong ngoặc.
 - examples: 2 câu ví dụ mới, trình độ B1.
-${COMMON_RULES.replace('${lang}', langName)}
+${COMMON_RULES.replace('${lang}', 'ngôn ngữ của từ đó')}
 - mnemonic: mẹo nhớ cụ thể cho người Việt (âm, hình ảnh, chiết tự), không chung chung.
 - emoji: 1–2 emoji.
 - base_form: dạng từ điển. romanization: phiên âm Latin nếu là tiếng Hàn. hanviet: âm Hán Việt nếu là từ gốc Hán, ngược lại để trống.`;
 }
 
-function refreshPrompt(raw, e, langName) {
-  return `Bạn giúp một người Việt ôn lại từ ${langName} đã học được một thời gian. Hãy làm MỚI nội dung để họ gặp từ này trong những tình huống khác, hiểu sâu hơn, không học vẹt một câu.
-Từ/cụm: "${raw['Từ vựng']}"
-Ngữ cảnh gốc: "${(raw['Câu / Ngữ cảnh'] || '').slice(0, 400)}"
-Nghĩa hiện tại: "${e.meaning_fixed || raw['Nghĩa tiếng Việt'] || ''}"
-Câu điền chỗ trống đang dùng: "${e.cloze_sentence || ''}"
-Các ví dụ đã có (KHÔNG lặp lại): ${JSON.stringify(listOf(e.examples).slice(0, 6))}
-Cụm đi kèm đã có: ${JSON.stringify(listOf(e.collocations).slice(0, 8))}
-Giải thích đã có: "${e.usage_note || ''}"
+function refreshBatchPrompt(raws) {
+  return `Bạn giúp một người Việt ôn lại các từ đã học được một thời gian. Với MỖI từ dưới đây, hãy làm MỚI nội dung để họ gặp từ trong những tình huống khác, hiểu sâu hơn, không học vẹt một câu.
 
-Trả JSON:
-- meaning_fixed: giữ nguyên nghĩa hiện tại; chỉ sửa nếu nó SAI so với ngữ cảnh gốc. Nếu từ có nghĩa phổ biến khác, nói trong usage_note, không đổi meaning_fixed.
+${raws.map((r, i) => {
+    const e = DB.enrichment[r.word_id] || {};
+    return `${i}. "${r['Từ vựng']}" (${langNameOf(r)})
+   Ngữ cảnh gốc: "${(r['Câu / Ngữ cảnh'] || '').slice(0, 300)}"
+   Nghĩa hiện tại: "${e.meaning_fixed || r['Nghĩa tiếng Việt'] || ''}"
+   Câu điền chỗ trống đang dùng: "${e.cloze_sentence || ''}"
+   Các ví dụ đã có (KHÔNG lặp lại): ${JSON.stringify(listOf(e.examples).slice(0, 6))}
+   Cụm đi kèm đã có: ${JSON.stringify(listOf(e.collocations).slice(0, 8))}
+   Giải thích đã có: "${e.usage_note || ''}"`;
+  }).join('\n')}
+
+Trả JSON { items: [...] }, MỖI từ đúng một phần tử, có "i" là chỉ số ở trên, và các trường:
+- meaning_fixed: giữ nguyên nghĩa hiện tại; chỉ sửa nếu nó SAI so với ngữ cảnh gốc. Nếu từ có nghĩa phổ biến khác, nói trong usage_note.
 - pos, ipa, definition_en: giữ hoặc chỉnh cho chính xác hơn.
 - cloze_sentence: một câu MỚI, bối cảnh khác hẳn câu đang dùng.
 - examples: 2 câu ví dụ MỚI ở bối cảnh khác các ví dụ đã có.
 - collocations: 2–3 cụm đi kèm MỚI, chưa có trong danh sách, kèm nghĩa tiếng Việt.
-${COMMON_RULES.replace('${lang}', langName)}
+${COMMON_RULES.replace('${lang}', 'ngôn ngữ của từ đó')}
 - usage_note: viết lại sâu hơn bản đã có, thêm điều mới (không lặp nguyên văn).
 - mnemonic: giữ mẹo cũ nếu tốt, hoặc đưa mẹo mới dễ nhớ hơn.
 - emoji: 1–2 emoji.`;
 }
 
-const costCols = u => ({ model: u.model, in_tokens: u.in_tokens, out_tokens: u.out_tokens,
-  thought_tokens: u.thought_tokens, cost_usd: u.cost_usd, cost_vnd: u.cost_vnd });
-const langNameOf = raw => raw['Ngôn ngữ'] === 'ko' ? 'tiếng Hàn' : 'tiếng Anh';
-
+// Làm giàu mọi từ trong danh sách: một request nếu được, tự chia nhỏ khi quá dài. Trả về các word_id đã có dữ liệu.
+async function enrichMany(raws, signal) {
+  return inChunks(raws, MAX_PER_REQ, async part => {
+    const { data, usage } = await callGemini({ feature: 'enrich', wordId: part.map(r => r.word_id).join(','),
+      prompt: enrichBatchPrompt(part), schema: ENRICH_BATCH_SCHEMA, maxTokens: outBudget(part.length), signal });
+    const got = byIndex(data, part.length), share = costShare(usage, got.size || 1), now = nowISO(), done = [];
+    got.forEach((x, i) => {
+      const raw = part[i];
+      const row = {
+        word_id: raw.word_id, word: raw['Từ vựng'],
+        meaning_fixed: x.meaning_fixed || '', pos: x.pos || '', ipa: x.ipa || '',
+        definition_en: x.definition_en || '', collocations: JSON.stringify(x.collocations || []),
+        cloze_sentence: x.cloze_sentence || '', examples: JSON.stringify(x.examples || []),
+        mnemonic: x.mnemonic || '', emoji: x.emoji || '', updated_at: now,
+        lang: raw['Ngôn ngữ'] || 'en', base_form: x.base_form || '',
+        romanization: x.romanization || '', hanviet: x.hanviet || '',
+        usage_note: x.usage_note || '', synonyms: JSON.stringify(x.synonyms || []), word_family: x.word_family || '',
+        refreshed_at: now, refresh_count: 0, ...share
+      };
+      DB.enrichment[raw.word_id] = row;
+      enqueue('upsertEnrichment', row);
+      done.push(raw.word_id);
+    });
+    return done;
+  });
+}
 async function enrich(raw, signal) {
-  const { data, usage } = await callGemini({ feature: 'enrich', wordId: raw.word_id, prompt: enrichPrompt(raw, langNameOf(raw)), schema: ENRICH_SCHEMA, signal });
-  const now = nowISO();
-  const row = {
-    word_id: raw.word_id, word: raw['Từ vựng'],
-    meaning_fixed: data.meaning_fixed || '', pos: data.pos || '', ipa: data.ipa || '',
-    definition_en: data.definition_en || '', collocations: JSON.stringify(data.collocations || []),
-    cloze_sentence: data.cloze_sentence || '', examples: JSON.stringify(data.examples || []),
-    mnemonic: data.mnemonic || '', emoji: data.emoji || '', updated_at: now,
-    lang: raw['Ngôn ngữ'] || 'en', base_form: data.base_form || '',
-    romanization: data.romanization || '', hanviet: data.hanviet || '',
-    usage_note: data.usage_note || '', synonyms: JSON.stringify(data.synonyms || []), word_family: data.word_family || '',
-    refreshed_at: now, refresh_count: 0, ...costCols(usage)
-  };
-  DB.enrichment[raw.word_id] = row;
-  enqueue('upsertEnrichment', row);
-  return row;
+  const done = await enrichMany([raw], signal);
+  if (!done.length) throw new Error('AI không trả dữ liệu cho từ này.');
+  return DB.enrichment[raw.word_id];
 }
 
 // Làm mới: câu điền mới + ví dụ mới được thêm lên đầu (giữ tối đa 6), cụm đi kèm cộng dồn (tối đa 10).
-async function refreshEnrichment(raw, signal) {
-  const e = DB.enrichment[raw.word_id];
-  if (!e) return enrich(raw, signal);
-  const { data, usage } = await callGemini({ feature: 'refresh', wordId: raw.word_id, prompt: refreshPrompt(raw, e, langNameOf(raw)), schema: ENRICH_SCHEMA, signal });
-  const uniq = arr => [...new Map(arr.filter(Boolean).map(x => [norm(x), x])).values()];
+function mergeRefresh(e, x, share) {
+  const uniq = arr => [...new Map(arr.filter(Boolean).map(v => [norm(v), v])).values()];
   const oldCloze = e.cloze_sentence ? [e.cloze_sentence] : [];
   const now = nowISO();
-  const row = {
+  return {
     ...e,
-    meaning_fixed: data.meaning_fixed || e.meaning_fixed,
-    pos: data.pos || e.pos, ipa: data.ipa || e.ipa, definition_en: data.definition_en || e.definition_en,
-    cloze_sentence: data.cloze_sentence || e.cloze_sentence,
-    examples: JSON.stringify(uniq([...(data.examples || []), ...listOf(e.examples), ...oldCloze]).slice(0, 6)),
-    collocations: JSON.stringify(uniq([...listOf(e.collocations), ...(data.collocations || [])]).slice(0, 10)),
-    usage_note: data.usage_note || e.usage_note || '',
-    synonyms: JSON.stringify(uniq([...(data.synonyms || []), ...listOf(e.synonyms)]).slice(0, 5)),
-    word_family: data.word_family || e.word_family || '',
-    mnemonic: data.mnemonic || e.mnemonic, emoji: data.emoji || e.emoji,
+    meaning_fixed: x.meaning_fixed || e.meaning_fixed,
+    pos: x.pos || e.pos, ipa: x.ipa || e.ipa, definition_en: x.definition_en || e.definition_en,
+    cloze_sentence: x.cloze_sentence || e.cloze_sentence,
+    examples: JSON.stringify(uniq([...(x.examples || []), ...listOf(e.examples), ...oldCloze]).slice(0, 6)),
+    collocations: JSON.stringify(uniq([...listOf(e.collocations), ...(x.collocations || [])]).slice(0, 10)),
+    usage_note: x.usage_note || e.usage_note || '',
+    synonyms: JSON.stringify(uniq([...(x.synonyms || []), ...listOf(e.synonyms)]).slice(0, 5)),
+    word_family: x.word_family || e.word_family || '',
+    mnemonic: x.mnemonic || e.mnemonic, emoji: x.emoji || e.emoji,
     updated_at: now, refreshed_at: now, refresh_count: (+e.refresh_count || 0) + 1,
-    ...costCols(usage)
+    ...share
   };
-  DB.enrichment[raw.word_id] = row;
-  enqueue('upsertEnrichment', row);
-  dailyStat('refresh', 1);
-  return row;
+}
+async function refreshMany(raws, signal) {
+  raws = raws.filter(r => r && DB.enrichment[r.word_id]);
+  const done = await inChunks(raws, MAX_PER_REQ, async part => {
+    const { data, usage } = await callGemini({ feature: 'refresh', wordId: part.map(r => r.word_id).join(','),
+      prompt: refreshBatchPrompt(part), schema: ENRICH_BATCH_SCHEMA, maxTokens: outBudget(part.length), signal });
+    const got = byIndex(data, part.length), share = costShare(usage, got.size || 1), ok = [];
+    got.forEach((x, i) => {
+      const raw = part[i];
+      const row = mergeRefresh(DB.enrichment[raw.word_id], x, share);
+      DB.enrichment[raw.word_id] = row;
+      enqueue('upsertEnrichment', row);
+      ok.push(raw.word_id);
+    });
+    return ok;
+  });
+  dailyStat('refresh', done.length);
+  return done;
+}
+async function refreshEnrichment(raw, signal) {
+  if (!DB.enrichment[raw.word_id]) return enrich(raw, signal);
+  const done = await refreshMany([raw], signal);
+  if (!done.length) throw new Error('AI không trả dữ liệu cho từ này.');
+  return DB.enrichment[raw.word_id];
 }
 
-// Hàng đợi làm mới chạy nền: mỗi lần chỉ một từ, tối đa 30 từ/ngày để giữ chi phí thấp.
-const refreshQ = [], refreshTried = new Set();
+/* Làm mới định kỳ (sau refresh_days ngày):
+   - Đầu mỗi phiên: làm mới chạy nền cho TẤT CẢ thẻ quá hạn trong phiên đó, một request.
+   - Thẻ ôn thêm quá hạn được ghi vào danh sách chờ, gửi gộp ở cuối phiên hoặc đầu phiên sau. */
+const RPEND = 'vocab.refreshPending';
+const pendingRefresh = () => { try { return JSON.parse(localStorage.getItem(RPEND) || '[]'); } catch { return []; } };
+const savePending = p => localStorage.setItem(RPEND, JSON.stringify(p));
+const rawById = id => DB.raw.find(r => r.word_id === id);
+const staleId = id => { const e = DB.enrichment[id]; return !!(e && !needsEnrich(e) && isStale(e) && rawById(id)); };
 let refreshing = false;
 function scheduleRefresh(items) {
   if (!cfg.geminiKey) return;
-  items.filter(Boolean).forEach(x => {
-    const id = x.raw.word_id, e = DB.enrichment[id];
-    if (e && !needsEnrich(e) && isStale(e) && !refreshTried.has(id)) { refreshTried.add(id); refreshQ.push(x.raw); }
-  });
-  runRefresh();
+  const p = pendingRefresh();
+  items.filter(Boolean).forEach(x => { const id = x.raw.word_id; if (staleId(id) && !p.includes(id)) p.push(id); });
+  savePending(p);
 }
-async function runRefresh() {
-  if (refreshing) return;
+async function flushRefresh(extra = []) {
+  if (!cfg.geminiKey || refreshing) return [];
+  const ids = [...new Set([...pendingRefresh(), ...extra.filter(Boolean).map(x => x.raw.word_id)])].filter(staleId);
+  savePending(ids);
+  const take = ids.slice(0, Math.max(0, REFRESH_DAILY - dailyStat('refresh')));
+  if (!take.length) return [];
   refreshing = true;
   try {
-    while (refreshQ.length && dailyStat('refresh') < 30) {
-      const raw = refreshQ.shift();
-      try { await refreshEnrichment(raw); } catch (err) { console.warn('Làm mới thất bại', raw['Từ vựng'], err); }
-    }
-  } finally { refreshing = false; }
+    const done = await refreshMany(take.map(rawById));
+    savePending(pendingRefresh().filter(id => !done.includes(id)));
+    return done;
+  } catch (err) { console.warn('Làm mới thất bại', err); return []; }
+  finally { refreshing = false; }
+}
+// Nút "Làm mới" trên một từ: gửi kèm mọi từ đang chờ làm mới trong cùng request.
+async function refreshNow(raw, signal) {
+  if (!DB.enrichment[raw.word_id] || needsEnrich(DB.enrichment[raw.word_id])) { await enrich(raw, signal); return [raw.word_id]; }
+  const others = pendingRefresh().filter(id => id !== raw.word_id && staleId(id)).map(rawById);
+  const done = await refreshMany([raw, ...others], signal);
+  savePending(pendingRefresh().filter(id => !done.includes(id)));
+  if (!done.includes(raw.word_id)) throw new Error('AI không trả dữ liệu cho từ này.');
+  return done;
 }
 
-async function gradeSentence(word, meaning, sentence) {
-  const { data } = await callGemini({
-    feature: 'grade', prompt:
-      `Người Việt đang học từ "${word}" (nghĩa: ${meaning}). Họ viết: "${sentence}".
-Chấm xem có dùng đúng nghĩa, đúng ngữ pháp và tự nhiên không.
-Trả JSON: score (0-3), feedback_vi (1-2 câu, thẳng thắn, hữu ích), corrected (câu đã sửa).`,
-    schema: {
-      type: 'OBJECT', properties: {
-        score: { type: 'INTEGER' }, feedback_vi: { type: 'STRING' }, corrected: { type: 'STRING' }
-      }, required: ['score', 'feedback_vi', 'corrected']
-    }
-  });
-  return data;
+// Chấm câu tự viết: gọi ngay sau khi bạn trả lời. list: [{ word, meaning, text }]
+const GRADE_SCHEMA = itemsSchema({ score: { type: 'INTEGER' }, feedback_vi: { type: 'STRING' }, corrected: { type: 'STRING' } },
+  ['score', 'feedback_vi', 'corrected']);
+async function gradeMany(list, signal) {
+  const { data } = await callGemini({ feature: 'grade', schema: GRADE_SCHEMA, signal, prompt:
+`Người Việt đang học ngoại ngữ. Mỗi câu dưới đây họ tự viết để dùng một từ cần ôn (số đầu dòng là chỉ số i).
+${list.map((x, i) => `${i}. từ "${x.word}" (nghĩa: ${x.meaning}) — câu của người học: "${x.text}"`).join('\n')}
+
+Với MỖI câu trả một phần tử { i, score, feedback_vi, corrected }:
+- score 0–3: 3 = dùng đúng nghĩa, đúng ngữ pháp, tự nhiên; 2 = đúng ý nhưng có lỗi nhỏ hoặc chưa tự nhiên; 1 = dùng sai nghĩa hoặc sai ngữ pháp nặng; 0 = không dùng từ cần ôn hoặc sai hẳn.
+- feedback_vi: 1–2 câu tiếng Việt, thẳng thắn, hữu ích.
+- corrected: câu đã sửa cho tự nhiên (đã tốt thì giữ nguyên).` });
+  return byIndex(data, list.length);
 }
 
 /* ============================ XẾP HÀNG ĐỢI THẺ ============================ */
@@ -1067,7 +1187,9 @@ function modelCard() {
   const down = downMap();
   return `<div class="card">
     <h3>Model AI</h3>
-    <p class="muted">Chọn model dùng đầu tiên. Nếu model đó hết hạn mức hoặc lỗi, app tự chuyển xuống model kế tiếp theo thứ tự bên dưới.</p>
+    <p class="muted">Chọn model dùng đầu tiên. Nếu model đó hết hạn mức hoặc lỗi, app tự chuyển xuống model kế tiếp theo thứ tự bên dưới.
+      Làm giàu và làm mới gom mọi từ cần xử lý vào một request (tự chia nhỏ khi quá dài); chấm bài thì chấm ngay từng câu.
+      App gửi tối đa ${aiRpm()} request mỗi phút (đổi trong Settings: <b>ai_rpm</b>).</p>
     ${MODELS.map((m, i) => {
       const st = m.retired ? `Google đã ngừng từ ${m.retired}`
         : (down[m.id] > Date.now() ? `tạm bỏ qua đến ${new Date(down[m.id]).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}` : '');
@@ -1115,11 +1237,14 @@ async function bulkRun(mode) {
   const say = t => { const el = document.getElementById('bulkState'); if (el) el.textContent = t; };
   const stop = document.getElementById('bulkStop');
   if (stop) { stop.classList.remove('hide'); stop.onclick = () => ctrl.abort(); }
-  for (const x of list) {
-    if (ctrl.signal.aborted) break;
-    say(`Đang xử lý ${ok + fail + 1}/${list.length}: ${x.raw['Từ vựng']}…`);
-    try { mode === 'enrich' ? await enrich(x.raw, ctrl.signal) : await refreshEnrichment(x.raw, ctrl.signal); ok++; }
-    catch (err) { if (err && err.aborted) break; fail++; console.warn(err); }
+  if (list.length) {
+    const raws = list.map(x => x.raw);
+    say(`Đang xử lý ${raws.length} từ${raws.length > MAX_PER_REQ ? ` (chia ${Math.ceil(raws.length / MAX_PER_REQ)} lần gọi)` : ' trong một lần gọi'}…`);
+    try {
+      const done = mode === 'enrich' ? await enrichMany(raws, ctrl.signal) : await refreshMany(raws, ctrl.signal);
+      ok = done.length; fail = raws.length - done.length;
+      if (mode === 'refresh') savePending(pendingRefresh().filter(id => !done.includes(id)));
+    } catch (err) { if (!(err && err.aborted)) { fail = raws.length; console.warn(err); } }
   }
   const stopped = ctrl.signal.aborted;
   await flush(true);
@@ -1149,6 +1274,7 @@ async function startSession(lang) {
     session.practiceMode = true;
     toast('Không có thẻ đến hạn. Đang ôn thêm, kết quả không tính vào lịch ôn.', 3500);
   } else if (session.backlog) toast('Đang tồn đọng nhiều thẻ ôn, hôm nay tạm dừng từ mới.', 3500);
+  flushRefresh(session.queue);   // chạy nền: làm mới mọi thẻ quá hạn của phiên này trong một request
   nextCard();
 }
 
@@ -1215,15 +1341,23 @@ async function nextCard() {
   item._scored = pick.scored;
   session.current = item;
   if (cfg.geminiKey && needsEnrich(DB.enrichment[item.card.word_id]) && !enrichFailed.has(item.card.word_id)) {
-    render(`<div class="card"><p class="muted">AI đang chuẩn bị nội dung cho từ này…</p></div>`);
-    try { await enrich(item.raw); }
-    catch (e) { enrichFailed.add(item.card.word_id); toast('Không gọi được Gemini: ' + e.message, 3500); }
+    // Gom từ này + MỌI thẻ khác trong phiên cũng đang thiếu dữ liệu → một request (tự chia nhỏ nếu quá dài).
+    const want = r => r && r.word_id !== item.raw.word_id && needsEnrich(DB.enrichment[r.word_id]) && !enrichFailed.has(r.word_id);
+    const pool = [...session.queue, ...(session.practiceMode || session.custom ? (session.practice || []) : [])];
+    const more = [...new Map(pool.map(x => x.raw).filter(want).map(r => [r.word_id, r])).values()];
+    const batch = [item.raw, ...more];
+    render(`<div class="card"><p class="muted">AI đang chuẩn bị nội dung cho ${batch.length > 1 ? batch.length + ' từ (một lần gọi)' : 'từ này'}…</p></div>`);
+    try {
+      const done = await enrichMany(batch);
+      batch.forEach(r => { if (!done.includes(r.word_id)) enrichFailed.add(r.word_id); });
+    } catch (e) { batch.forEach(r => enrichFailed.add(r.word_id)); toast('Không gọi được Gemini: ' + e.message, 3500); }
   }
   showCard(item);
 }
 
 function endScreen() {
   flush(true);
+  flushRefresh();                // gửi gộp các thẻ ôn thêm đang chờ làm mới
   session.current = null;
   const canMore = !session.custom && buildPracticePool(session.lang).length > 0;
   const studied = [...new Set(session.recent)];
@@ -1491,6 +1625,7 @@ const EX = {
     });
   },
 
+  // Viết câu: chấm ngay sau khi bạn trả lời
   write({ d, head, finish }) {
     render(head + `
       <div class="card">
@@ -1507,9 +1642,9 @@ const EX = {
       if (!text) return;
       $('#ok').disabled = true; $('#ok').textContent = 'Đang chấm…';
       let fb = null;
-      try { fb = await gradeSentence(d.word, d.meaning, text); }
+      try { fb = (await gradeMany([{ word: d.word, meaning: d.meaning, text }])).get(0) || null; }
       catch { toast('Không chấm được, bạn tự đánh giá nhé'); }
-      finish(fb ? [1, 2, 3, 4][clamp(fb.score, 0, 3)] : 3,
+      finish(fb ? [1, 2, 3, 4][clamp(+fb.score || 0, 0, 3)] : 3,
         fb ? `<p class="verdict ${fb.score >= 2 ? 'ok' : 'no'}">${esc(fb.feedback_vi)}</p>
               <p class="context">${esc(fb.corrected)}</p>` : '');
     });
@@ -1618,7 +1753,7 @@ function reveal(item, d, rating, extra, metrics) {
   const rn = $('#refreshNow');
   if (rn) rn.onclick = async () => {
     rn.disabled = true; rn.textContent = 'Đang làm mới…';
-    try { await refreshEnrichment(d.raw); rn.textContent = 'Đã làm mới, lần gặp sau sẽ thấy'; flush(true); }
+    try { const done = await refreshNow(d.raw); rn.textContent = done.length > 1 ? `Đã làm mới ${done.length} từ trong một lần gọi` : 'Đã làm mới, lần gặp sau sẽ thấy'; flush(true); }
     catch (err) { rn.disabled = false; rn.textContent = '✨ Làm mới'; toast('Không làm mới được: ' + err.message, 3500); }
   };
   const det = $('details.more');
@@ -1636,6 +1771,12 @@ async function commit(item, d, g, token) {
   // Chặn chấm trùng: dù bấm dồn hay phím lặp, một lần hiện thẻ chỉ tính điểm một lần.
   if (token !== undefined && item._done === token) return;
   item._done = token;
+  applyResult(item, d, g);
+  nextCard();
+}
+
+// Ghi kết quả một thẻ: log, lịch ôn (nếu tính điểm), bộ đếm; không chuyển màn hình.
+function applyResult(item, d, g) {
   const scored = item._scored !== false;
   const stageBefore = item.card.stage ?? 0;
   enqueue('appendLog', {
@@ -1663,9 +1804,8 @@ async function commit(item, d, g, token) {
     if (g === 1) session.practice.splice(Math.min(3, session.practice.length), 0, item); // quên thì gặp lại sau vài thẻ
   }
   session.current = null;
-  scheduleRefresh([item]);   // chỉ làm mới đúng thẻ bạn vừa làm xong (nếu quá hạn), không đoán trước thẻ sắp tới
+  scheduleRefresh([item]);   // xếp thẻ vừa làm xong vào danh sách chờ làm mới (đủ 4 từ mới gọi AI một lần)
   flush();          // gửi nền, không chờ
-  nextCard();
 }
 
 /* ============================ HỖ TRỢ HIỂN THỊ ============================ */
@@ -2189,7 +2329,7 @@ function practiceHub() {
     ['match', 'Ghép cặp', 'Nối từ với nghĩa, tính giờ', learnedCards(L).length >= 4],
     ['error', 'Tìm và sửa lỗi', 'AI viết câu dùng sai từ, bạn chọn cách sửa', ai],
     ['translate', 'Dịch ngược', 'Dịch câu tiếng Việt sang ' + LANG_NAME[L], ai && translatePool(L).length >= 2],
-    ['diary', 'Nhật ký 3 câu', 'Viết 3 câu về chính bạn, AI sửa', ai],
+    ['diary', 'Nhật ký', 'Viết câu về chính bạn, được chèn tiếng Việt', ai],
     ['hanviet', 'Hán Việt', 'Ghép từ gốc Hán với âm Hán Việt', L === 'ko' && hanvietPool().length >= 3]
   ].filter(a => a[3]);
   return `<div class="card">
@@ -2368,21 +2508,29 @@ function drawPassage() {
   });
 }
 
-/* ----- Tìm và sửa lỗi (AI viết câu dùng sai) ----- */
-const ERROR_SCHEMA = { type: 'OBJECT', properties: { items: { type: 'ARRAY', items: { type: 'OBJECT', properties: {
-  i: { type: 'INTEGER' }, wrong_sentence: { type: 'STRING' }, wrong_part: { type: 'STRING' }, right_part: { type: 'STRING' },
-  distractors: { type: 'ARRAY', items: { type: 'STRING' } }, explain_vi: { type: 'STRING' } },
-  required: ['i', 'wrong_sentence', 'wrong_part', 'right_part', 'distractors', 'explain_vi'] } } }, required: ['items'] };
+/* ----- Tìm và sửa lỗi: kho câu hỏi soạn sẵn -----
+   AI soạn trước 5 câu trong MỘT request và cất vào máy. Mỗi lần làm, app lấy câu từ kho;
+   còn 2 câu thì âm thầm soạn thêm 5 câu mới (từ khác, kiểu lỗi khác) để làm tiếp không phải chờ.
+   Câu soạn sẵn chưa dùng được giữ lại cho lần sau, không bị bỏ phí. */
+const ERROR_SCHEMA = itemsSchema({
+  wrong_sentence: { type: 'STRING' }, wrong_part: { type: 'STRING' }, right_part: { type: 'STRING' },
+  distractors: { type: 'ARRAY', items: { type: 'STRING' } }, explain_vi: { type: 'STRING' }, kind: { type: 'STRING' }
+}, ['wrong_sentence', 'wrong_part', 'right_part', 'distractors', 'explain_vi']);
+const ERR_PREFETCH = 5, ERR_LOW = 2;
+const errKey = (k, lang) => `vocab.err${k}.${lang}`;
+const readJSON = (k, d) => { try { const v = JSON.parse(localStorage.getItem(k) || 'null'); return v ?? d; } catch { return d; } };
+const errFetching = {};
 
-function errorPrompt(lang, items) {
+function errorPrompt(lang, items, avoidKinds = []) {
   const list = items.map((x, i) => `${i}. "${x.raw['Từ vựng']}" — nghĩa: ${meaningOf(x)}`).join('\n');
   return `Bạn tạo bài tập "tìm và sửa lỗi" cho một người Việt đang học ${LANG_NAME[lang]}.
 Với MỖI từ dưới đây, viết MỘT câu ${LANG_NAME[lang]} ngắn (trình độ B1, đời thường) có dùng từ đó SAI theo đúng một kiểu lỗi người học hay mắc: sai cụm đi kèm hoặc giới từ, sai dạng từ, sai sắc thái hoặc ngữ cảnh, hoặc sai trật tự. Câu không được có lỗi nào khác.
+Dùng nhiều kiểu lỗi khác nhau giữa các câu${avoidKinds.length ? `; ưu tiên tránh các kiểu vừa dùng gần đây: ${avoidKinds.join(', ')}` : ''}.
 Danh sách (số đầu dòng là chỉ số i):
 ${list}
 
 Trả JSON { items: [...] }, mỗi phần tử có:
-- i, wrong_sentence (câu có lỗi).
+- i, wrong_sentence (câu có lỗi), kind (kiểu lỗi: collocation | preposition | form | nuance | order).
 - wrong_part: đoạn LIỀN MẠCH, chép NGUYÊN VĂN từ wrong_sentence, chứa chỗ sai (1–4 từ).
 - right_part: đoạn thay thế wrong_part để câu đúng và tự nhiên.
 - distractors: 3 đoạn thay thế khác trông hợp lý nhưng KHÔNG đúng trong câu này (không trùng right_part).
@@ -2395,40 +2543,68 @@ function normalizeErrorItem(it, items) {
   if (!ws || !wp || !rp || !ws.includes(wp) || norm(wp) === norm(rp)) return null;
   const dis = [...new Set((it.distractors || []).map(String).filter(s => s && norm(s) !== norm(rp) && norm(s) !== norm(wp)))].slice(0, 3);
   if (dis.length < 2) return null;
-  return { x, ws, wp, rp, opts: shuffle([rp, ...dis]), explain: String(it.explain_vi || '') };
+  return { x, ws, wp, rp, opts: shuffle([rp, ...dis]), explain: String(it.explain_vi || ''), kind: String(it.kind || '') };
 }
-async function startError(lang) {
-  const items = pickPractice(lang, 5, x => !!meaningOf(x));
-  if (items.length < 3) { toast('Cần ít nhất 3 từ đã học.'); return; }
+// Câu trong kho còn dùng được (từ vẫn còn trong danh sách đã học).
+function errBank(lang) {
+  const ids = new Set(learnedCards(lang).map(x => x.raw.word_id));
+  return readJSON(errKey('Bank', lang), []).filter(q => ids.has(q.word_id));
+}
+// Soạn thêm 5 câu (một request); ưu tiên từ sắp quên, tránh từ đang có trong kho và từ vừa làm.
+function fetchErrors(lang) {
+  if (errFetching[lang]) return errFetching[lang];
+  const bank = errBank(lang), used = readJSON(errKey('Used', lang), []);
+  const inBank = new Set(bank.map(q => q.word_id)), recent = new Set(used.slice(-10));
+  let items = pickPractice(lang, ERR_PREFETCH, x => !!meaningOf(x) && !inBank.has(x.raw.word_id) && !recent.has(x.raw.word_id));
+  if (items.length < 2) items = pickPractice(lang, ERR_PREFETCH, x => !!meaningOf(x) && !inBank.has(x.raw.word_id));
+  if (!items.length) return Promise.resolve(0);
+  const kinds = readJSON(errKey('Kinds', lang), []).slice(-6);
+  errFetching[lang] = callGemini({ feature: 'error', wordId: items.map(x => x.raw.word_id).join(','),
+    prompt: errorPrompt(lang, items, kinds), schema: ERROR_SCHEMA })
+    .then(({ data }) => {
+      const seen = new Set();
+      const fresh = (data.items || []).map(it => normalizeErrorItem(it, items))
+        .filter(q => q && !seen.has(q.x.raw.word_id) && seen.add(q.x.raw.word_id))
+        .map(q => ({ word_id: q.x.raw.word_id, ws: q.ws, wp: q.wp, rp: q.rp, dis: q.opts.filter(o => o !== q.rp), explain: q.explain, kind: q.kind }));
+      localStorage.setItem(errKey('Bank', lang), JSON.stringify([...readJSON(errKey('Bank', lang), []), ...fresh].slice(-40)));
+      return fresh.length;
+    })
+    .finally(() => { errFetching[lang] = null; });
+  return errFetching[lang];
+}
+
+function startError(lang) {
   endAct();
-  act = { key: 'error', token: {}, lang, items, i: 0, ok: 0, cur: null, ctrl: new AbortController() };
+  act = { key: 'error', token: {}, lang, n: 0, ok: 0, cur: null };
   return nextError();
 }
-// Mỗi câu chỉ được yêu cầu từ AI khi tới lượt làm. Thoát giữa chừng thì không tốn thêm request nào.
 async function nextError() {
   const a = act;
   if (!a || a.key !== 'error') return;
-  if (a.i >= a.items.length) { actSummary('Tìm và sửa lỗi', `Đúng ${a.ok}/${a.items.length} câu`, [], () => startError(a.lang)); return; }
-  const x = a.items[a.i];
-  actLoading('Tìm và sửa lỗi', `AI đang viết câu cho “${x.raw['Từ vựng']}”…`);
-  try {
-    const { data } = await callGemini({ feature: 'error', wordId: x.raw.word_id, prompt: errorPrompt(a.lang, [x]), schema: ERROR_SCHEMA, signal: a.ctrl.signal });
-    if (act !== a) return;
-    const q = normalizeErrorItem((data.items || [])[0] || {}, [x]);
-    if (!q) throw new Error('AI trả về câu không hợp lệ.');
-    a.cur = q;
-    drawError();
-  } catch (e) {
-    if (e.aborted || act !== a) return;
-    actError('Tìm và sửa lỗi', e.message, () => nextError(), () => { a.i++; nextError(); });
+  let bank = errBank(a.lang);
+  if (!bank.length) {
+    actLoading('Tìm và sửa lỗi', 'AI đang soạn vài câu hỏi…');
+    try { await fetchErrors(a.lang); }
+    catch (e) { if (act === a) actError('Tìm và sửa lỗi', e.message, () => nextError()); return; }
+    if (act !== a) return;                                   // đã thoát: câu vừa soạn vẫn nằm trong kho cho lần sau
+    bank = errBank(a.lang);
+    if (!bank.length) { actError('Tìm và sửa lỗi', 'AI chưa trả về câu hợp lệ, hãy thử lại.', () => nextError()); return; }
   }
+  const s = bank[0];
+  localStorage.setItem(errKey('Bank', a.lang), JSON.stringify(readJSON(errKey('Bank', a.lang), []).filter(q => !(q.word_id === s.word_id && q.ws === s.ws))));
+  localStorage.setItem(errKey('Used', a.lang), JSON.stringify([...readJSON(errKey('Used', a.lang), []), s.word_id].slice(-30)));
+  if (s.kind) localStorage.setItem(errKey('Kinds', a.lang), JSON.stringify([...readJSON(errKey('Kinds', a.lang), []), s.kind].slice(-12)));
+  if (bank.length - 1 <= ERR_LOW) fetchErrors(a.lang).catch(err => console.warn('Soạn trước câu hỏi thất bại', err));   // chuẩn bị sẵn, không chờ
+  const raw = rawById(s.word_id);
+  a.cur = { x: { raw, card: cardOf(raw) }, ws: s.ws, wp: s.wp, rp: s.rp, opts: shuffle([s.rp, ...s.dis]), explain: s.explain };
+  drawError();
 }
 function drawError() {
   const a = act, q = a.cur;
   a.t0 = Date.now();
   const html = esc(q.ws).replace(esc(q.wp), `<mark class="err">${esc(q.wp)}</mark>`);
-  render(actBar('Tìm và sửa lỗi') + `<div class="progress"><i style="width:${(a.i / a.items.length) * 100}%"></i></div>
-    <div class="card"><p class="muted">${a.i + 1}/${a.items.length} · từ cần ôn: <b>${esc(q.x.raw['Từ vựng'])}</b> (${esc(meaningOf(q.x))})</p>
+  render(actBar('Tìm và sửa lỗi') + `
+    <div class="card"><p class="muted">Câu ${a.n + 1}${a.n ? ` · đúng ${a.ok}/${a.n}` : ''} · từ cần ôn: <b>${esc(q.x.raw['Từ vựng'])}</b> (${esc(meaningOf(q.x))})</p>
       <p class="context">${html}</p>
       <p class="muted">Chỗ được tô màu đang dùng chưa đúng. Chọn cách sửa phù hợp nhất.</p>
       <div>${q.opts.map((o, i) => `<button class="choice" data-v="${esc(o)}"><span class="k">${i + 1}</span>${esc(o)}</button>`).join('')}</div>
@@ -2440,18 +2616,19 @@ function answerError(b) {
   const a = act, q = a.cur, ok = b.dataset.v === q.rp, ms = Date.now() - a.t0;
   app.querySelectorAll('.choice').forEach(x => { x.disabled = true; if (x.dataset.v === q.rp) x.classList.add('right'); });
   if (!ok) b.classList.add('wrong');
-  if (ok) a.ok++;
+  a.n++; if (ok) a.ok++;
   logPractice([{ word_id: q.x.raw.word_id, exercise: 'error', rating: rateOf(ok, ms), ms }]);
   $('#fb').innerHTML = `<p class="verdict ${ok ? 'ok' : 'no'}">${ok ? 'Đúng.' : 'Chưa đúng.'}</p>
     <p class="context">${esc(q.ws.replace(q.wp, q.rp))}</p>${q.explain ? `<p class="muted">${esc(q.explain)}</p>` : ''}
-    <div class="row" style="margin-top:12px"><button class="primary" id="next">${a.i + 1 < a.items.length ? 'Câu tiếp theo' : 'Xem kết quả'}</button></div>`;
+    <div class="row" style="margin-top:12px"><button class="primary" id="next">Câu tiếp theo</button><button id="home2">Xong (đúng ${a.ok}/${a.n})</button></div>`;
   arm(500);
-  $('#next').onclick = once(() => { a.i++; nextError(); });
+  $('#next').onclick = once(() => nextError());
+  $('#home2').onclick = once(() => { endAct(); viewHome(); });
 }
 
-/* ----- Dịch ngược: câu tiếng Việt → ngôn ngữ đang học ----- */
-const TRANSLATE_SCHEMA = { type: 'OBJECT', properties: { score: { type: 'INTEGER' }, feedback_vi: { type: 'STRING' }, better: { type: 'STRING' } },
-  required: ['score', 'feedback_vi', 'better'] };
+/* ----- Dịch ngược: từng câu một, chấm ngay khi bạn trả lời ----- */
+const TRANSLATE_SCHEMA = itemsSchema({ score: { type: 'INTEGER' }, feedback_vi: { type: 'STRING' }, better: { type: 'STRING' } },
+  ['score', 'feedback_vi', 'better']);
 function localTranslateScore(text, ref, word) {
   const a = new Set(toksAny(text)), b = toksAny(ref);
   if (!a.size || !b.length) return 1;
@@ -2486,30 +2663,31 @@ function drawTranslate() {
     const text = $('#ans').value.trim();
     if (!text) return;
     $('#ok').disabled = true; $('#ok').textContent = 'Đang chấm…';
-    const token = a.token;
     let fb;
     try {
       const { data } = await callGemini({ feature: 'translate', wordId: q.x.raw.word_id, schema: TRANSLATE_SCHEMA, signal: a.ctrl.signal, prompt:
-        `Một người Việt dịch câu sang ${LANG_NAME[a.lang]}.
-Câu tiếng Việt: "${q.vi}"
-Bản dịch mẫu (chỉ để tham khảo, không bắt buộc giống từng chữ): "${q.en}"
-Từ cần dùng: "${q.x.raw['Từ vựng']}"
-Bản dịch của người học: "${text}"
-Chấm score 0–3: 3 = đúng nghĩa, đúng ngữ pháp, tự nhiên và dùng đúng từ cần học; 2 = đúng ý nhưng có lỗi nhỏ hoặc chưa tự nhiên; 1 = hiểu sai một phần hoặc không dùng từ cần học; 0 = sai hẳn.
-Trả JSON: score, feedback_vi (1–2 câu ngắn, hữu ích), better (một câu hoàn chỉnh, tự nhiên nhất, có dùng từ cần học).` });
-      fb = { score: clamp(+data.score || 0, 0, 3), feedback: data.feedback_vi, better: data.better };
+`Một người Việt dịch câu sau sang ${LANG_NAME[a.lang]} (chỉ số i = 0).
+0. Câu tiếng Việt: "${q.vi}"
+   Bản dịch mẫu (chỉ để tham khảo, không bắt buộc giống từng chữ): "${q.en}"
+   Từ cần dùng: "${q.x.raw['Từ vựng']}"
+   Bản dịch của người học: "${text}"
+Trả JSON { items: [{ i: 0, score, feedback_vi, better }] }:
+- score 0–3: 3 = đúng nghĩa, đúng ngữ pháp, tự nhiên và dùng đúng từ cần dùng; 2 = đúng ý nhưng có lỗi nhỏ hoặc chưa tự nhiên; 1 = hiểu sai một phần hoặc không dùng từ cần dùng; 0 = sai hẳn.
+- feedback_vi: 1–2 câu ngắn, hữu ích.
+- better: một câu hoàn chỉnh, tự nhiên nhất, có dùng từ cần dùng.` });
+      const r = byIndex(data, 1).get(0);
+      if (!r) throw new Error('AI không trả kết quả');
+      fb = { score: clamp(+r.score || 0, 0, 3), feedback: r.feedback_vi, better: r.better || q.en };
     } catch (e) {
       if (e && e.aborted) return;
-      const s = localTranslateScore(text, q.en, q.x.raw['Từ vựng']);
-      fb = { score: s, feedback: 'Không gọi được AI, app chấm tạm bằng cách so khớp với bản mẫu.', better: q.en };
+      fb = { score: localTranslateScore(text, q.en, q.x.raw['Từ vựng']), feedback: 'Không gọi được AI, app chấm tạm bằng cách so khớp với câu mẫu.', better: q.en };
     }
-    if (!act || act.token !== token) return;
-    const ms = Date.now() - a.t0;
+    if (act !== a) return;
     a.sum += fb.score;
-    logPractice([{ word_id: q.x.raw.word_id, exercise: 'translate', rating: [1, 2, 3, 4][fb.score], ms }]);
+    logPractice([{ word_id: q.x.raw.word_id, exercise: 'translate', rating: [1, 2, 3, 4][fb.score], ms: Date.now() - a.t0 }]);
     $('#fb').innerHTML = `<p class="verdict ${fb.score >= 2 ? 'ok' : 'no'}">${esc(fb.feedback || '')}</p>
-      <p class="context">${esc(fb.better || q.en)}</p>
-      <div class="row" style="margin-top:12px"><button class="primary" id="next">${a.i + 1 < a.qs.length ? 'Tiếp tục' : 'Xem kết quả'}</button></div>`;
+      <p class="ex-en">→ ${esc(fb.better)}</p>
+      <div class="row" style="margin-top:12px"><button class="primary" id="next">${a.i + 1 < a.qs.length ? 'Câu tiếp theo' : 'Xem kết quả'}</button></div>`;
     arm(500);
     $('#next').onclick = once(() => {
       a.i++;
@@ -2519,39 +2697,69 @@ Trả JSON: score, feedback_vi (1–2 câu ngắn, hữu ích), better (một c�
   });
 }
 
-/* ----- Nhật ký 3 câu ----- */
-const DIARY_SCHEMA = { type: 'OBJECT', properties: { items: { type: 'ARRAY', items: { type: 'OBJECT', properties: {
-  i: { type: 'INTEGER' }, score: { type: 'INTEGER' }, feedback_vi: { type: 'STRING' }, corrected: { type: 'STRING' } },
-  required: ['i', 'score', 'feedback_vi', 'corrected'] } } }, required: ['items'] };
+/* ----- Nhật ký: viết từng câu, chấm ngay; được chèn tiếng Việt khi chưa biết từ ----- */
+const DIARY_SCHEMA = itemsSchema({
+  score: { type: 'INTEGER' }, feedback_vi: { type: 'STRING' }, corrected: { type: 'STRING' },
+  vi_terms: { type: 'ARRAY', items: { type: 'OBJECT', properties: {
+    vi: { type: 'STRING' }, en: { type: 'STRING' }, explain_vi: { type: 'STRING' }, example: { type: 'STRING' } },
+    required: ['vi', 'en', 'explain_vi', 'example'] } }
+}, ['score', 'feedback_vi', 'corrected', 'vi_terms']);
+
 function startDiary(lang) {
   const items = pickPractice(lang, 3, x => !!meaningOf(x));
   if (items.length < 2) { toast('Cần ít nhất 2 từ đã học.'); return; }
   endAct();
-  act = { key: 'diary', token: {}, lang, items, ctrl: new AbortController() };
-  render(actBar('Nhật ký 3 câu') + `<div class="card"><p class="muted">Với mỗi từ, viết một câu về chính cuộc sống của bạn hôm nay hoặc tuần này. Câu gắn với bản thân sẽ dễ nhớ hơn.</p>
-    ${items.map((x, i) => `<label for="d${i}">${esc(x.raw['Từ vựng'])} · ${esc(meaningOf(x))}</label><textarea id="d${i}" data-i="${i}" autocapitalize="off" style="min-height:64px"></textarea>`).join('')}
-    <div class="row" style="margin-top:14px"><button class="primary" id="ok">Chấm 3 câu</button></div><div id="fb"></div></div>`);
+  act = { key: 'diary', token: {}, lang, items, i: 0, ctrl: new AbortController() };
+  drawDiary();
+}
+function drawDiary() {
+  const a = act, x = a.items[a.i], L = LANG_NAME[a.lang];
+  render(actBar('Nhật ký') + `<div class="progress"><i style="width:${(a.i / a.items.length) * 100}%"></i></div>
+    <div class="card">
+      <p class="muted">${a.i + 1}/${a.items.length} · Viết một câu về chính cuộc sống của bạn. Chỗ nào chưa biết nói bằng ${L}, cứ viết bằng tiếng Việt, AI sẽ dịch và giải thích kỹ từ đó.</p>
+      <p class="q">${esc(x.raw['Từ vựng'])} <span class="muted">· ${esc(meaningOf(x))}</span></p>
+      <textarea id="ans" autocapitalize="off" style="min-height:72px" placeholder="${a.lang === 'ko' ? 'Ví dụ: 오늘 저는 정말 háo hức 했어요.' : 'Ví dụ: Today I felt really háo hức about the trip.'}"></textarea>
+      <p class="muted kbdhint" style="margin-top:6px">Enter để chấm · Shift + Enter xuống dòng</p>
+      <div class="row" style="margin-top:12px"><button class="primary" id="ok">Chấm câu</button></div>
+      <div id="fb"></div></div>`);
   wireBack();
+  $('#ans').focus();
+  $('#ans').onkeydown = e => { if (enterOK(e) && !e.shiftKey) { e.preventDefault(); $('#ok').click(); } };
+  const t0 = Date.now();
   $('#ok').onclick = once(async () => {
-    const texts = items.map((_, i) => ($(`#d${i}`).value || '').trim());
-    if (!texts.some(Boolean)) { toast('Hãy viết ít nhất một câu.'); return; }
+    const text = $('#ans').value.trim();
+    if (!text) return;
     $('#ok').disabled = true; $('#ok').textContent = 'Đang chấm…';
-    const token = act.token, t0 = Date.now();
     try {
-      const list = items.map((x, i) => texts[i] ? `${i}. từ "${x.raw['Từ vựng']}" (nghĩa: ${meaningOf(x)}) — câu của người học: "${texts[i]}"` : null).filter(Boolean).join('\n');
-      const { data } = await callGemini({ feature: 'diary', schema: DIARY_SCHEMA, signal: act.ctrl.signal, prompt:
-        `Người Việt đang học ${LANG_NAME[lang]} viết câu về cuộc sống của mình, mỗi câu dùng một từ cần ôn.
-${list}
-Với từng câu (theo chỉ số i): score 0–3 (3 = đúng nghĩa của từ, đúng ngữ pháp, tự nhiên), feedback_vi (1–2 câu ngắn, thẳng thắn, hữu ích), corrected (câu đã sửa cho tự nhiên; nếu đã tốt thì giữ nguyên).` });
-      if (!act || act.token !== token) return;
-      const res = (data.items || []).filter(r => items[+r.i] && texts[+r.i]);
-      logPractice(res.map(r => ({ word_id: items[+r.i].raw.word_id, exercise: 'diary', rating: [1, 2, 3, 4][clamp(+r.score || 0, 0, 3)], ms: Math.round((Date.now() - t0) / res.length) })));
-      $('#fb').innerHTML = res.map(r => `<p class="verdict ${r.score >= 2 ? 'ok' : 'no'}"><b>${esc(items[+r.i].raw['Từ vựng'])}:</b> ${esc(r.feedback_vi)}</p><p class="context">${esc(r.corrected)}</p>`).join('')
-        + `<div class="row" style="margin-top:12px"><button class="primary" id="again">Viết lại với từ khác</button></div>`;
-      $('#again').onclick = once(() => startDiary(lang));
+      const { data } = await callGemini({ feature: 'diary', wordId: x.raw.word_id, schema: DIARY_SCHEMA, signal: a.ctrl.signal, prompt:
+`Một người Việt đang học ${L} viết nhật ký, dùng một từ cần ôn (chỉ số i = 0).
+Họ ĐƯỢC PHÉP chèn từ hoặc cụm tiếng Việt vào câu khi chưa biết cách nói bằng ${L} (viết bồi). Đó là điều bình thường, không phải lỗi.
+0. từ cần ôn "${x.raw['Từ vựng']}" (nghĩa: ${meaningOf(x)}) — câu của người học: "${text}"
+
+Trả JSON { items: [{ i: 0, score, feedback_vi, corrected, vi_terms }] }:
+- score 0–3: chấm phần dùng từ cần ôn (đúng nghĩa, đúng ngữ pháp, tự nhiên). KHÔNG trừ điểm chỉ vì có chèn tiếng Việt.
+- corrected: câu hoàn chỉnh, tự nhiên, viết HOÀN TOÀN bằng ${L} (thay các phần tiếng Việt bằng cách nói tự nhiên nhất, đồng thời sửa lỗi khác nếu có).
+- feedback_vi: 1–2 câu nhận xét ngắn, thẳng thắn, hữu ích về cách dùng từ cần ôn và ngữ pháp.
+- vi_terms: với MỖI từ/cụm tiếng Việt người học đã chèn: { vi: đúng cụm tiếng Việt đó, en: cách nói ${L} phù hợp nhất trong câu này, explain_vi: giải thích kỹ (sắc thái, khi nào dùng, khác gì với các từ gần nghĩa, có cách nói nào khác), 2–3 câu, example: một câu ví dụ ${L} khác, ngắn, đời thường, dùng cách nói đó }. Không chèn tiếng Việt thì trả mảng rỗng.` });
+      if (act !== a) return;
+      const r = byIndex(data, 1).get(0);
+      if (!r) throw new Error('AI không trả kết quả, hãy thử lại.');
+      logPractice([{ word_id: x.raw.word_id, exercise: 'diary', rating: [1, 2, 3, 4][clamp(+r.score || 0, 0, 3)], ms: Date.now() - t0 }]);
+      const terms = (r.vi_terms || []).filter(t => t && t.vi && t.en);
+      $('#ok').textContent = 'Đã chấm';
+      $('#fb').innerHTML = `<div class="diary-r">
+          <p class="verdict ${r.score >= 2 ? 'ok' : 'no'}">${esc(r.feedback_vi)}</p>
+          <p class="ex-en">→ ${esc(r.corrected)}</p>
+          ${terms.length ? `<div class="vt">${terms.map(t => `
+            <div class="vt-i"><div><span class="vt-vi">${esc(t.vi)}</span> → <b>${esc(t.en)}</b></div>
+              <p>${esc(t.explain_vi)}</p>${t.example ? `<p class="vt-ex">${esc(t.example)}</p>` : ''}</div>`).join('')}</div>` : ''}
+        </div>
+        <div class="row" style="margin-top:14px"><button class="primary" id="next">${a.i + 1 < a.items.length ? 'Câu tiếp theo' : 'Viết với từ khác'}</button></div>`;
+      arm(500);
+      $('#next').onclick = once(() => { a.i++; if (a.i < a.items.length) drawDiary(); else startDiary(a.lang); });
     } catch (e) {
-      if (e.aborted || !act || act.token !== token) return;
-      $('#ok').disabled = false; $('#ok').textContent = 'Chấm 3 câu';
+      if (e.aborted || act !== a) return;
+      $('#ok').disabled = false; $('#ok').textContent = 'Chấm câu';
       toast('Không chấm được: ' + e.message, 3500);
     }
   });
